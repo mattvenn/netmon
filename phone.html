@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>netmon phone test</title>
+<style>
+:root {
+  --surface-1: #fcfcfb; --page: #f9f9f7; --ink-1: #0b0b0b; --ink-2: #52514e;
+  --ink-muted: #898781; --grid: #e1e0d9; --border: rgba(11,11,11,0.10);
+  --st-good: #0ca30c; --st-crit: #d03b3b;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface-1: #1a1a19; --page: #0d0d0d; --ink-1: #ffffff; --ink-2: #c3c2b7;
+    --grid: #2c2c2a; --border: rgba(255,255,255,0.10);
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink-1);
+       font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.wrap { max-width: 480px; margin: 0 auto; padding: 20px 16px; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+p.sub { color: var(--ink-2); margin: 0 0 16px; font-size: 14px; }
+button {
+  width: 100%; padding: 14px; font: inherit; font-weight: 600; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 12px;
+  background: var(--surface-1); color: var(--ink-1);
+}
+button:disabled { color: var(--ink-muted); }
+table { border-collapse: collapse; width: 100%; margin-top: 18px; font-size: 14px; }
+td, th { padding: 8px 6px; border-bottom: 1px solid var(--grid); text-align: left; }
+td.v { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+td.ok { color: var(--st-good); } td.bad { color: var(--st-crit); }
+.note { color: var(--ink-muted); font-size: 13px; margin-top: 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Phone network test</h1>
+  <p class="sub">Runs checks from this phone and logs them next to the Mac's data, so you can compare the two.</p>
+  <button id="go">Run tests</button>
+  <table id="res" style="display:none">
+    <tr><th>Test</th><th></th><th style="text-align:right">Result</th></tr>
+  </table>
+  <p class="note" id="note"></p>
+</div>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const table = $('res');
+
+function addRow(name, ok, text) {
+  table.style.display = '';
+  const tr = document.createElement('tr');
+  const n = document.createElement('td'); n.textContent = name;
+  const s = document.createElement('td'); s.textContent = ok ? '✓' : '✕'; s.className = ok ? 'ok' : 'bad';
+  const v = document.createElement('td'); v.textContent = text; v.className = 'v';
+  tr.append(n, s, v); table.append(tr);
+}
+
+async function timeFetch(url, opts, timeout = 8000) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeout);
+  const t0 = performance.now();
+  try {
+    await fetch(url, {cache: 'no-store', signal: ctl.signal, ...opts});
+    return {ok: true, ms: Math.round(performance.now() - t0)};
+  } catch (e) {
+    return {ok: false, error: e.name};
+  } finally { clearTimeout(timer); }
+}
+
+async function run() {
+  const b = $('go');
+  b.disabled = true; b.textContent = 'Testing…';
+  table.style.display = 'none';
+  while (table.rows.length > 1) table.deleteRow(1);
+  const tests = [];
+
+  // 1. LAN latency to the Mac (median of 5)
+  const lan = [];
+  for (let i = 0; i < 5; i++) {
+    const r = await timeFetch('/api/ping?x=' + Math.random(), {}, 3000);
+    if (r.ok) lan.push(r.ms);
+  }
+  lan.sort((a, b2) => a - b2);
+  const lanOk = lan.length >= 3, lanMs = lan[Math.floor(lan.length / 2)];
+  addRow('LAN to Mac', lanOk, lanOk ? lanMs + ' ms' : 'failed');
+  tests.push({probe: 'lan', target: 'mac', ok: lanOk, value: lanMs ?? null});
+
+  // 2. Internet reachability (no DNS variability: fetch by name and by IP)
+  const byName = await timeFetch('https://www.gstatic.com/generate_204?x=' + Math.random(), {mode: 'no-cors'});
+  addRow('Internet (by name, incl. DNS)', byName.ok, byName.ok ? byName.ms + ' ms' : byName.error);
+  tests.push({probe: 'http_name', target: 'gstatic', ok: byName.ok, value: byName.ms ?? null, detail: byName.ok ? null : byName});
+  const byIp = await timeFetch('https://1.1.1.1/cdn-cgi/trace?x=' + Math.random(), {mode: 'no-cors'});
+  addRow('Internet (by IP, no DNS)', byIp.ok, byIp.ok ? byIp.ms + ' ms' : byIp.error);
+  tests.push({probe: 'http_ip', target: '1.1.1.1', ok: byIp.ok, value: byIp.ms ?? null, detail: byIp.ok ? null : byIp});
+
+  // 3. Download speed (~8s cap via ranged requests)
+  b.textContent = 'Testing download…';
+  let bytes = 0, t0 = performance.now(), speedOk = false, mbps = null;
+  try {
+    const resp = await fetch('https://speed.cloudflare.com/__down?bytes=40000000', {cache: 'no-store'});
+    const reader = resp.body.getReader();
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      bytes += value.length;
+      if (performance.now() - t0 > 8000) { ctlAbort(reader); break; }
+    }
+    const secs = (performance.now() - t0) / 1000;
+    if (bytes > 0 && secs > 0.2) { mbps = Math.round(bytes * 8 / secs / 1e5) / 10; speedOk = true; }
+  } catch (e) { /* leave failed */ }
+  function ctlAbort(reader) { try { reader.cancel(); } catch (e) {} }
+  addRow('Download', speedOk, speedOk ? mbps + ' Mbps' : 'failed');
+  tests.push({probe: 'speed_down', target: 'cloudflare', ok: speedOk, value: mbps, detail: {bytes}});
+
+  // report back
+  try {
+    await fetch('/api/phone-report', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({source: 'phone', tests})});
+    $('note').textContent = 'Logged at ' + new Date().toLocaleTimeString() + ' — results appear in the dashboard events table.';
+  } catch (e) {
+    $('note').textContent = 'Tests ran but could not be logged (Mac unreachable).';
+  }
+  b.disabled = false; b.textContent = 'Run tests again';
+}
+$('go').addEventListener('click', run);
+</script>
+</body>
+</html>

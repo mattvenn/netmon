@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>netmon</title>
+<style>
+:root {
+  --surface-1: #fcfcfb; --page: #f9f9f7;
+  --ink-1: #0b0b0b; --ink-2: #52514e; --ink-muted: #898781;
+  --grid: #e1e0d9; --baseline: #c3c2b7; --border: rgba(11,11,11,0.10);
+  --c-router: #2a78d6; --c-cf: #1baf7a; --c-goog: #eda100;
+  --c-sys: #e87ba4; --c-down: #008300; --c-up: #eb6834; --c-rssi: #4a3aa7;
+  --st-good: #0ca30c; --st-warn: #fab219; --st-serious: #ec835a; --st-crit: #d03b3b;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface-1: #1a1a19; --page: #0d0d0d;
+    --ink-1: #ffffff; --ink-2: #c3c2b7; --ink-muted: #898781;
+    --grid: #2c2c2a; --baseline: #383835; --border: rgba(255,255,255,0.10);
+    --c-router: #3987e5; --c-cf: #199e70; --c-goog: #c98500;
+    --c-sys: #d55181; --c-down: #008300; --c-up: #d95926; --c-rssi: #9085e9;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--page); color: var(--ink-1);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.wrap { max-width: 1100px; margin: 0 auto; padding: 16px; }
+h1 { font-size: 18px; font-weight: 600; margin: 0; }
+h1 small { color: var(--ink-muted); font-weight: 400; font-size: 12px; margin-left: 8px; }
+.topbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0 0 16px; }
+.controls .spacer { flex: 1; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface-1); }
+.seg button {
+  border: 0; background: none; color: var(--ink-2); padding: 6px 12px;
+  font: inherit; cursor: pointer;
+}
+.seg button.on { background: var(--ink-1); color: var(--page); font-weight: 600; }
+button.act {
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface-1);
+  color: var(--ink-1); padding: 6px 14px; font: inherit; cursor: pointer;
+}
+button.act:disabled { color: var(--ink-muted); cursor: wait; }
+.banner {
+  display: flex; gap: 10px; align-items: center;
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-left-width: 4px; border-radius: 10px; padding: 12px 14px; margin: 0 0 12px;
+}
+.banner .txt { flex: 1; }
+.banner .when { color: var(--ink-muted); font-size: 12px; white-space: nowrap; }
+.banner.ok   { border-left-color: var(--st-good); }
+.banner.warn { border-left-color: var(--st-warn); }
+.banner.bad  { border-left-color: var(--st-crit); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin: 0 0 16px; }
+.tile {
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 10px; padding: 10px 12px;
+}
+.tile .lbl { color: var(--ink-2); font-size: 12px; display: flex; gap: 6px; align-items: center; }
+.tile .val { font-size: 20px; font-weight: 600; margin-top: 2px; }
+.tile .sub { color: var(--ink-muted); font-size: 11px; margin-top: 2px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.dot.ok { background: var(--st-good); } .dot.warn { background: var(--st-warn); }
+.dot.bad { background: var(--st-crit); } .dot.unknown { background: var(--ink-muted); }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; }
+.card {
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 10px; padding: 12px 12px 6px; position: relative;
+}
+.card h2 { font-size: 13px; font-weight: 600; margin: 0 0 2px; }
+.card .legend { display: flex; gap: 12px; flex-wrap: wrap; margin: 2px 0 4px; }
+.legend span { color: var(--ink-2); font-size: 11px; display: inline-flex; align-items: center; gap: 5px; }
+.legend i { width: 14px; height: 0; border-top: 3px solid; border-radius: 2px; }
+.chart { width: 100%; display: block; }
+.loading .chart, .loading .tiles { opacity: 0.45; }
+.tooltip {
+  position: fixed; pointer-events: none; z-index: 10; display: none;
+  background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+  padding: 7px 10px; font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,0.18); min-width: 130px;
+}
+.tooltip .tt-t { color: var(--ink-muted); margin-bottom: 4px; }
+.tooltip .row { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
+.tooltip .row i { width: 12px; height: 0; border-top: 3px solid; border-radius: 2px; flex: none; }
+.tooltip .row .v { font-weight: 600; margin-left: auto; padding-left: 10px; font-variant-numeric: tabular-nums; }
+.tooltip .row .n { color: var(--ink-2); }
+details { margin: 16px 0; }
+summary { cursor: pointer; color: var(--ink-2); }
+table { border-collapse: collapse; width: 100%; font-size: 12px; margin-top: 8px; }
+th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; }
+th { color: var(--ink-2); font-weight: 600; }
+.fail-row td:first-child { color: var(--st-crit); font-weight: 600; }
+footer { color: var(--ink-muted); font-size: 12px; margin: 18px 0 8px; }
+.qr-mini { margin-left: auto; text-align: center; color: var(--ink-muted); font-size: 11px; }
+.qr-mini img {
+  display: block; width: 96px; height: 96px; margin: 0 auto 2px;
+  background: #ffffff; border-radius: 6px; padding: 4px; border: 1px solid var(--border);
+}
+@media (max-width: 700px) { .qr-mini { display: none; } }
+</style>
+</head>
+<body>
+<div class="wrap" id="app">
+  <div class="topbar">
+    <h1>netmon <small id="src-label"></small></h1>
+    <div class="qr-mini" id="qr-mini">
+      <img id="qr-img" src="/api/qr.svg" alt="QR code linking to this dashboard">
+      scan to open on phone
+    </div>
+  </div>
+  <div id="banner" class="banner"><span id="banner-txt" class="txt">loading…</span><span id="banner-when" class="when"></span></div>
+  <div class="controls">
+    <div class="seg" id="range-seg">
+      <button data-h="1">1h</button><button data-h="6" class="on">6h</button>
+      <button data-h="24">24h</button><button data-h="168">7d</button>
+    </div>
+    <div class="seg" id="source-seg" style="display:none"></div>
+    <div class="spacer"></div>
+    <button class="act" id="btn-probe">Run checks now</button>
+    <button class="act" id="btn-speed">Speed test now</button>
+  </div>
+  <div class="tiles" id="tiles"></div>
+  <div class="grid2" id="charts"></div>
+  <details id="events-box"><summary>Recent failures &amp; events</summary><div id="events"></div></details>
+  <footer>netmon · phone test page at <a href="/phone" style="color:inherit">/phone</a></footer>
+</div>
+<div class="tooltip" id="tt"></div>
+<script>
+"use strict";
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const COLORS = () => ({
+  router: css('--c-router'), cf: css('--c-cf'), goog: css('--c-goog'),
+  sys: css('--c-sys'), down: css('--c-down'), up: css('--c-up'),
+  rssi: css('--c-rssi'), muted: css('--ink-muted')
+});
+
+let rangeH = 6, source = null, history = [], status = null;
+let refetchTimer = null;
+
+const $ = id => document.getElementById(id);
+const fmt = {
+  ms: v => v == null ? '—' : (v >= 100 ? Math.round(v) + ' ms' : v.toFixed(1) + ' ms'),
+  pct: v => v == null ? '—' : v.toFixed(0) + '%',
+  dbm: v => v == null ? '—' : Math.round(v) + ' dBm',
+  mbps: v => v == null ? '—' : v.toFixed(1) + ' Mbps',
+  time: t => new Date(t).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}),
+  timeS: t => new Date(t).toLocaleTimeString(),
+  dayTime: t => new Date(t).toLocaleString([], {weekday:'short', hour:'2-digit', minute:'2-digit'})
+};
+
+// ---------------- data fetch ----------------
+async function fetchStatus() {
+  try {
+    status = await (await fetch('/api/status')).json();
+    renderStatus();
+  } catch (e) { bannerError(); }
+}
+async function fetchHistory() {
+  $('app').classList.add('loading');
+  try {
+    const r = await (await fetch('/api/history?hours=' + rangeH)).json();
+    history = r.rows;
+    renderSources();
+    renderCharts();
+    renderEvents();
+  } catch (e) { /* keep previous render */ }
+  $('app').classList.remove('loading');
+}
+function bannerError() {
+  const b = $('banner');
+  b.className = 'banner bad';
+  $('banner-txt').textContent = "Can't reach the netmon server — is it running on the Mac?";
+  $('banner-when').textContent = '';
+}
+
+// ---------------- status row ----------------
+const TILE_DEFS = [
+  ['wifi', 'WiFi'], ['router', 'Router'], ['internet', 'Internet'],
+  ['dns_system', 'DNS (system)'], ['dns_router', 'DNS (router)'],
+  ['dns_direct', 'DNS (direct)'], ['http', 'Web fetch'], ['speed', 'Speed']
+];
+function renderStatus() {
+  if (!status) return;
+  const v = status.verdict || {level: 'unknown', text: 'no data yet'};
+  const b = $('banner');
+  b.className = 'banner ' + v.level;
+  const icon = {ok: '✓', warn: '⚠', bad: '✕'}[v.level] || '·';
+  $('banner-txt').textContent = icon + '  ' + v.text;
+  $('banner-when').textContent = 'as of ' + fmt.timeS(status.ts * 1000);
+
+  const tiles = $('tiles');
+  tiles.textContent = '';
+  for (const [key, label] of TILE_DEFS) {
+    let level = 'unknown', val = '—', sub = '';
+    if (key === 'speed') {
+      const d = status.last_speed && status.last_speed.speed_down;
+      const u = status.last_speed && status.last_speed.speed_up;
+      if (d) { level = d.ok ? 'ok' : 'bad'; val = d.ok ? '↓' + d.value.toFixed(0) + (u && u.ok ? ' ↑' + u.value.toFixed(0) : '') : 'failed';
+               sub = d.ok ? 'Mbps, ' + fmt.time(d.ts * 1000) : ''; }
+    } else {
+      const c = status.components && status.components[key];
+      if (c) {
+        level = c.level; val = c.label || '—';
+        if (key === 'wifi' && c.sample && c.sample.detail) {
+          const d = c.sample.detail;
+          sub = (d.band || '') + ' ch' + (d.channel ?? '?') + ' · ' + (d.rate_mbps ?? '?') + ' Mbps link';
+        }
+      }
+    }
+    const t = document.createElement('div'); t.className = 'tile';
+    const l = document.createElement('div'); l.className = 'lbl';
+    const dot = document.createElement('span'); dot.className = 'dot ' + level;
+    l.append(dot, document.createTextNode(label + (level === 'warn' ? ' ⚠' : level === 'bad' ? ' ✕' : '')));
+    const vv = document.createElement('div'); vv.className = 'val'; vv.textContent = val;
+    t.append(l, vv);
+    if (sub) { const s = document.createElement('div'); s.className = 'sub'; s.textContent = sub; t.append(s); }
+    tiles.append(t);
+  }
+}
+
+// ---------------- sources ----------------
+function renderSources() {
+  const srcs = [...new Set(history.map(r => r.source))].filter(s => !history.some(
+    r => r.source === s && r.probe.startsWith('phone_')) || true);
+  const nonPhone = [...new Set(history.filter(r => !r.probe.startsWith('phone_')).map(r => r.source))];
+  if (!source || !nonPhone.includes(source)) source = nonPhone[0] || null;
+  $('src-label').textContent = source ? 'measuring from ' + source : '';
+  const seg = $('source-seg');
+  if (nonPhone.length > 1) {
+    seg.style.display = '';
+    seg.textContent = '';
+    for (const s of nonPhone) {
+      const b = document.createElement('button');
+      b.textContent = s; b.className = s === source ? 'on' : '';
+      b.onclick = () => { source = s; renderSources(); renderCharts(); };
+      seg.append(b);
+    }
+  } else seg.style.display = 'none';
+}
+
+// ---------------- charts ----------------
+function pick(probe, target) {
+  return history.filter(r => r.probe === probe && (target == null || r.target === target)
+                          && r.source === source);
+}
+function seriesOf(rows, valueFn) {
+  const pts = [], fails = [];
+  for (const r of rows) {
+    const v = valueFn ? valueFn(r) : r.value;
+    if (r.ok && v != null) pts.push({t: r.ts * 1000, v});
+    else fails.push({t: r.ts * 1000, err: (r.detail && r.detail.error) || 'failed'});
+  }
+  return {pts, fails};
+}
+
+let drawQueue = [];
+function renderCharts() {
+  const C = COLORS();
+  const box = $('charts');
+  box.textContent = '';
+  drawQueue = [];
+  if (!source) return;
+  const loss = r => (r.detail && r.detail.loss_pct != null) ? r.detail.loss_pct : (r.ok ? 0 : 100);
+
+  chartCard(box, 'Latency', 'ms', [
+    {name: 'router', color: C.router, ...seriesOf(pick('gateway_ping'))},
+    {name: '1.1.1.1', color: C.cf, ...seriesOf(pick('wan_ping', '1.1.1.1'))},
+    {name: '8.8.8.8', color: C.goog, ...seriesOf(pick('wan_ping', '8.8.8.8'))}
+  ], {fmt: fmt.ms, zero: true});
+
+  chartCard(box, 'Packet loss', '%', [
+    {name: 'router', color: C.router, pts: pick('gateway_ping').map(r => ({t: r.ts*1000, v: loss(r)})), fails: []},
+    {name: '1.1.1.1', color: C.cf, pts: pick('wan_ping','1.1.1.1').map(r => ({t: r.ts*1000, v: loss(r)})), fails: []},
+    {name: '8.8.8.8', color: C.goog, pts: pick('wan_ping','8.8.8.8').map(r => ({t: r.ts*1000, v: loss(r)})), fails: []}
+  ], {fmt: fmt.pct, zero: true, max: 100});
+
+  chartCard(box, 'DNS lookup time', 'ms', [
+    {name: 'system', color: C.sys, ...seriesOf(pick('dns', 'system'))},
+    {name: 'via router', color: C.router, ...seriesOf(pick('dns', 'router'))},
+    {name: 'direct 1.1.1.1', color: C.cf, ...seriesOf(pick('dns', 'direct'))}
+  ], {fmt: fmt.ms, zero: true});
+
+  chartCard(box, 'WiFi signal', 'dBm', [
+    {name: 'signal', color: C.rssi, ...seriesOf(pick('wifi'))},
+    {name: 'noise', color: C.muted, pts: pick('wifi').filter(r => r.ok && r.detail && r.detail.noise_dbm != null)
+        .map(r => ({t: r.ts*1000, v: r.detail.noise_dbm})), fails: []}
+  ], {fmt: fmt.dbm, extraTip: t => {
+      const r = nearest(pick('wifi'), t);
+      return r && r.detail ? (r.detail.band || '') + ' ch' + (r.detail.channel ?? '?') + ' · link ' + (r.detail.rate_mbps ?? '?') + ' Mbps' : '';
+  }});
+
+  chartCard(box, 'Bandwidth', 'Mbps', [
+    {name: 'download', color: C.down, ...seriesOf(pick('speed_down'))},
+    {name: 'upload', color: C.up, ...seriesOf(pick('speed_up'))}
+  ], {fmt: fmt.mbps, zero: true, markers: true});
+
+  // draw after every card is in the grid, so each holder has its final width
+  for (const job of drawQueue) drawChart(...job);
+  drawQueue = [];
+}
+
+function nearest(rows, t) {
+  let best = null, bd = Infinity;
+  for (const r of rows) { const d = Math.abs(r.ts * 1000 - t); if (d < bd) { bd = d; best = r; } }
+  return bd < 90000 ? best : null;
+}
+
+function chartCard(parent, title, unit, series, opts) {
+  const card = document.createElement('div'); card.className = 'card';
+  const h = document.createElement('h2'); h.textContent = title + ' (' + unit + ')';
+  card.append(h);
+  const leg = document.createElement('div'); leg.className = 'legend';
+  if (series.length > 1) {
+    for (const s of series) {
+      const sp = document.createElement('span');
+      const i = document.createElement('i'); i.style.borderTopColor = s.color;
+      sp.append(i, document.createTextNode(s.name)); leg.append(sp);
+    }
+  }
+  card.append(leg);
+  const holder = document.createElement('div');
+  card.append(holder);
+  parent.append(card);
+  drawQueue.push([holder, series, opts]);
+}
+
+function drawChart(holder, series, opts) {
+  const W = Math.max(300, holder.clientWidth || 480), H = 190;
+  const M = {l: 44, r: 12, t: 8, b: 22};
+  const iw = W - M.l - M.r, ih = H - M.t - M.b;
+  const now = Date.now(), t0 = now - rangeH * 3600 * 1000;
+  const X = t => M.l + (t - t0) / (now - t0) * iw;
+
+  let vmin = Infinity, vmax = -Infinity;
+  for (const s of series) for (const p of s.pts) { if (p.v < vmin) vmin = p.v; if (p.v > vmax) vmax = p.v; }
+  if (!isFinite(vmin)) { vmin = 0; vmax = 1; }
+  if (opts.zero) vmin = Math.min(0, vmin);
+  if (opts.max != null) vmax = Math.max(vmax, 1); else if (vmax === vmin) vmax = vmin + 1;
+  const [ymin, ymax, ticks] = niceScale(vmin, vmax, opts.max);
+  const Y = v => M.t + ih - (v - ymin) / (ymax - ymin) * ih;
+
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('class', 'chart');
+  svg.setAttribute('height', H);
+  const el = (n, at, parent2) => {
+    const e = document.createElementNS(NS, n);
+    for (const k in at) e.setAttribute(k, at[k]);
+    (parent2 || svg).append(e); return e;
+  };
+
+  // gridlines + y labels
+  for (const tv of ticks) {
+    el('line', {x1: M.l, x2: W - M.r, y1: Y(tv), y2: Y(tv), stroke: css('--grid'), 'stroke-width': 1});
+    const tx = el('text', {x: M.l - 6, y: Y(tv) + 3.5, 'text-anchor': 'end', 'font-size': 10, fill: css('--ink-muted')});
+    tx.textContent = Math.abs(tv) >= 1000 ? (tv/1000) + 'k' : tv;
+  }
+  // x ticks
+  for (const [t, lbl] of timeTicks(t0, now)) {
+    el('line', {x1: X(t), x2: X(t), y1: H - M.b, y2: H - M.b + 3, stroke: css('--baseline'), 'stroke-width': 1});
+    const tx = el('text', {x: X(t), y: H - 6, 'text-anchor': 'middle', 'font-size': 10, fill: css('--ink-muted')});
+    tx.textContent = lbl;
+  }
+  el('line', {x1: M.l, x2: W - M.r, y1: H - M.b, y2: H - M.b, stroke: css('--baseline'), 'stroke-width': 1});
+
+  const gapMs = Math.max(3 * 30000, (now - t0) / 120);
+  for (const s of series) {
+    let d = '', prev = null;
+    for (const p of s.pts) {
+      d += (prev && p.t - prev.t < gapMs ? 'L' : 'M') + X(p.t).toFixed(1) + ',' + Y(p.v).toFixed(1);
+      prev = p;
+    }
+    if (d) el('path', {d, fill: 'none', stroke: s.color, 'stroke-width': 2,
+                       'stroke-linejoin': 'round', 'stroke-linecap': 'round'});
+    if (opts.markers) for (const p of s.pts)
+      el('circle', {cx: X(p.t), cy: Y(p.v), r: 4, fill: s.color, stroke: css('--surface-1'), 'stroke-width': 2});
+    const last = s.pts[s.pts.length - 1];
+    if (last) el('circle', {cx: X(last.t), cy: Y(last.v), r: 4, fill: s.color, stroke: css('--surface-1'), 'stroke-width': 2});
+    for (const f of s.fails)
+      el('line', {x1: X(f.t), x2: X(f.t), y1: M.t, y2: M.t + 7, stroke: css('--st-crit'), 'stroke-width': 2});
+  }
+
+  // hover layer
+  const cross = el('line', {x1: 0, x2: 0, y1: M.t, y2: H - M.b, stroke: css('--baseline'),
+                            'stroke-width': 1, visibility: 'hidden'});
+  const tt = $('tt');
+  svg.addEventListener('pointermove', ev => {
+    const r = svg.getBoundingClientRect();
+    const px = (ev.clientX - r.left) * (W / r.width);
+    const t = t0 + (px - M.l) / iw * (now - t0);
+    if (px < M.l || px > W - M.r) { cross.setAttribute('visibility', 'hidden'); tt.style.display = 'none'; return; }
+    let snapT = null, bd = Infinity;
+    for (const s of series) for (const p of s.pts) {
+      const d = Math.abs(p.t - t); if (d < bd) { bd = d; snapT = p.t; }
+    }
+    if (snapT == null) return;
+    cross.setAttribute('x1', X(snapT)); cross.setAttribute('x2', X(snapT));
+    cross.setAttribute('visibility', 'visible');
+    tt.textContent = '';
+    const tl = document.createElement('div'); tl.className = 'tt-t';
+    tl.textContent = fmt.timeS(snapT); tt.append(tl);
+    for (const s of series) {
+      let best = null, d2 = Infinity;
+      for (const p of s.pts) { const d = Math.abs(p.t - snapT); if (d < d2) { d2 = d; best = p; } }
+      const row = document.createElement('div'); row.className = 'row';
+      const key = document.createElement('i'); key.style.borderTopColor = s.color;
+      const n = document.createElement('span'); n.className = 'n'; n.textContent = s.name;
+      const v = document.createElement('span'); v.className = 'v';
+      v.textContent = (best && d2 < 90000) ? opts.fmt(best.v) : '—';
+      row.append(key, n, v); tt.append(row);
+    }
+    if (opts.extraTip) {
+      const ex = opts.extraTip(snapT);
+      if (ex) { const d = document.createElement('div'); d.className = 'tt-t'; d.textContent = ex; tt.append(d); }
+    }
+    tt.style.display = 'block';
+    const tw = tt.offsetWidth;
+    tt.style.left = Math.min(ev.clientX + 14, window.innerWidth - tw - 8) + 'px';
+    tt.style.top = (ev.clientY + 14) + 'px';
+  });
+  svg.addEventListener('pointerleave', () => { cross.setAttribute('visibility', 'hidden'); tt.style.display = 'none'; });
+  holder.textContent = '';
+  holder.append(svg);
+}
+
+function niceScale(lo, hi, forceMax) {
+  if (forceMax != null && hi > forceMax * 0.6) hi = forceMax;
+  const span = hi - lo || 1;
+  const step = [1,2,2.5,5,10].map(m => m * Math.pow(10, Math.floor(Math.log10(span / 4))))
+    .find(s => span / s <= 5.5) || Math.pow(10, Math.ceil(Math.log10(span / 4)));
+  const ymin = Math.floor(lo / step) * step;
+  const ymax = Math.ceil(hi / step) * step;
+  const ticks = [];
+  for (let v = ymin; v <= ymax + step / 2; v += step) ticks.push(Math.round(v * 100) / 100);
+  return [ymin, ymax, ticks];
+}
+function timeTicks(t0, t1) {
+  const span = t1 - t0;
+  const steps = [5*60e3, 15*60e3, 30*60e3, 60*60e3, 3*3600e3, 6*3600e3, 12*3600e3, 24*3600e3];
+  const step = steps.find(s => span / s <= 7) || 24*3600e3;
+  const out = [];
+  let t = Math.ceil(t0 / step) * step;
+  for (; t <= t1; t += step)
+    out.push([t, span > 24*3600e3 ? fmt.dayTime(t) : fmt.time(t)]);
+  return out;
+}
+
+// ---------------- events table ----------------
+function renderEvents() {
+  const box = $('events');
+  box.textContent = '';
+  const rows = history.filter(r => !r.ok || r.probe.startsWith('speed') || r.probe.startsWith('phone_')).slice(-80).reverse();
+  const table = document.createElement('table');
+  const thead = document.createElement('tr');
+  for (const h of ['status', 'time', 'source', 'probe', 'target', 'value', 'detail']) {
+    const th = document.createElement('th'); th.textContent = h; thead.append(th);
+  }
+  table.append(thead);
+  for (const r of rows) {
+    const tr = document.createElement('tr');
+    if (!r.ok) tr.className = 'fail-row';
+    const cells = [r.ok ? 'ok' : 'FAIL', fmt.timeS(r.ts * 1000), r.source, r.probe, r.target,
+                   r.value != null ? String(Math.round(r.value * 10) / 10) : '—',
+                   r.detail ? JSON.stringify(r.detail) : ''];
+    for (const c of cells) { const td = document.createElement('td'); td.textContent = c; tr.append(td); }
+    table.append(tr);
+  }
+  box.append(table);
+}
+
+$('qr-img').addEventListener('error', () => { $('qr-mini').style.display = 'none'; });
+
+// ---------------- controls ----------------
+$('range-seg').addEventListener('click', ev => {
+  const b = ev.target.closest('button'); if (!b) return;
+  rangeH = parseFloat(b.dataset.h);
+  for (const x of $('range-seg').children) x.classList.toggle('on', x === b);
+  fetchHistory();
+});
+$('btn-probe').addEventListener('click', async () => {
+  const b = $('btn-probe'); b.disabled = true; b.textContent = 'Running…';
+  try { await fetch('/api/run-probe', {method: 'POST'}); } catch (e) {}
+  await fetchStatus(); await fetchHistory();
+  b.disabled = false; b.textContent = 'Run checks now';
+});
+$('btn-speed').addEventListener('click', async () => {
+  const b = $('btn-speed'); b.disabled = true; b.textContent = 'Testing… (~25s)';
+  try { await fetch('/api/run-speedtest', {method: 'POST'}); } catch (e) {}
+  await fetchStatus(); await fetchHistory();
+  b.disabled = false; b.textContent = 'Speed test now';
+});
+window.addEventListener('resize', () => renderCharts());
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { renderStatus(); renderCharts(); });
+
+fetchStatus(); fetchHistory();
+setInterval(fetchStatus, 15000);
+setInterval(fetchHistory, 60000);
+</script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+# systemd unit for running netmon on a Raspberry Pi (or any Linux box).
+#
+#   cd /home/pi/network-monitor
+#   python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+#   sudo cp install/netmon.service /etc/systemd/system/
+#   # edit User= and the paths below if your checkout isn't /home/pi/network-monitor
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now netmon
+#
+# Needs: python3 (preinstalled on Raspberry Pi OS) and the `iw` tool for wifi stats.
+
+[Unit]
+Description=netmon home network monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/network-monitor
+ExecStart=/home/pi/network-monitor/.venv/bin/python3 /home/pi/network-monitor/netmon.py --db /home/pi/network-monitor/netmon.db run
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

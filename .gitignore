@@ -1,0 +1,11 @@
+# measurement data
+netmon.db
+netmon.db-*
+
+# runtime
+logs/
+.venv/
+__pycache__/
+
+# local tool settings
+.claude/settings.local.json
