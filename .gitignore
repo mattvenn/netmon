@@ -7,5 +7,8 @@ logs/
 .venv/
 __pycache__/
 
+# machine-specific probe targets
+config.json
+
 # local tool settings
 .claude/settings.local.json

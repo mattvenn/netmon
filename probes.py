@@ -35,6 +35,25 @@ def get_default_gateway():
         return None
 
 
+def get_hop2(timeout_s=8):
+    """IP of the second hop out — the ISP box when double-NATed.
+    None if there is no private middle box or discovery fails."""
+    import ipaddress
+    cmd = ["traceroute", "-n", "-m", "2", "-q", "1", "-w", "2", "8.8.8.8"]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s).stdout
+    except Exception:
+        return None
+    for line in out.splitlines():
+        m = re.match(r"\s*2\s+([\d.]+)", line)
+        if m:
+            try:
+                return m.group(1) if ipaddress.ip_address(m.group(1)).is_private else None
+            except ValueError:
+                return None
+    return None
+
+
 def ping(host, count=5, timeout_s=2):
     """Returns {ok, loss_pct, min_ms, avg_ms, max_ms}."""
     if IS_MAC:

@@ -31,7 +31,9 @@ read-mostly and LAN-only by assumption — don't port-forward it.
 |---|---|
 | WiFi signal/noise, channel, band, link rate | Mac↔router radio quality; band-flapping (2.4 vs 5 GHz) |
 | Ping router (5×) | the WiFi hop itself — loss/jitter here means WiFi or router, never the ISP |
+| Ping the ISP box (3×, auto-discovered 2nd hop when double-NATed) | router↔ISP-box link — tells you *which* box to reboot |
 | Ping 1.1.1.1 and 8.8.8.8 (3×) | the ISP/upstream path |
+| Ping LAN devices from `config.json` (3×) | extra gear like a WiFi extender — is it alive, is the path to it ropey |
 | DNS via system resolver | what apps actually experience |
 | DNS asking the router directly | the router's DNS forwarder (the thing a reboot often fixes) |
 | DNS asking 1.1.1.1 directly | bypasses the router's DNS entirely |
@@ -40,6 +42,12 @@ read-mostly and LAN-only by assumption — don't port-forward it.
 
 Data lives in `netmon.db` (SQLite), pruned after 90 days.
 
+Machine-specific targets go in a `config.json` next to `netmon.py` (gitignored):
+
+```json
+{ "lan_targets": { "extender": "192.168.2.184" } }
+```
+
 ## Reading the verdict
 
 The banner walks the stack from the radio outwards — the first broken layer is
@@ -47,8 +55,14 @@ the diagnosis:
 
 - **Can't reach the router** → WiFi link or router hung. If the phone still
   works (check `/phone`), it's the Mac's WiFi.
-- **Router reachable, internet down** → modem/ISP, or the router's WAN session
-  died. This is the case where a router reboot plausibly helps.
+- **Router up, ISP box not responding** → reboot the ISP box, not the router;
+  check the cable between them.
+- **Both routers up, internet down** → fibre/ISP side; rebooting your own
+  router won't help.
+- **Router reachable, internet down (no ISP-box data)** → modem/ISP, or the
+  router's WAN session died. This is the case where a router reboot plausibly
+  helps. (Hop-2 discovery needs `traceroute`, present on macOS; on a Pi:
+  `sudo apt install traceroute`.)
 - **Internet fine, system DNS broken, direct DNS fine** → the router's DNS
   forwarder is wedged. Reboot the router, or set the device's DNS to 1.1.1.1
   and carry on.

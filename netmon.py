@@ -9,6 +9,7 @@ Commands:
 
 import argparse
 import json
+import os
 import socket
 import threading
 import time
@@ -16,12 +17,29 @@ import time
 import db
 import probes
 
+BASE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DB = "netmon.db"
 DEFAULT_PORT = 8737
 DEFAULT_INTERVAL = 30
 DEFAULT_SPEED_INTERVAL = 15 * 60
 
 SOURCE = socket.gethostname().split(".")[0]
+
+
+def load_config():
+    """Optional machine-specific config.json next to this file.
+    Keys: lan_targets — {name: ip} of LAN devices to ping each cycle (e.g. an extender)."""
+    try:
+        with open(os.path.join(BASE, "config.json")) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+    except ValueError as e:
+        print(f"[config] config.json invalid, ignoring: {e}", flush=True)
+        return {}
+
+
+CONFIG = load_config()
 
 
 def run_cycle(conn, source=SOURCE):
@@ -45,6 +63,15 @@ def run_cycle(conn, source=SOURCE):
     else:
         rec("gateway_ping", "none", {"ok": False, "error": "no-default-route"}, "avg_ms")
 
+    hop2 = _hop2_ip(conn)
+    if hop2:
+        rec("hop2_ping", hop2, probes.ping(hop2, count=3), "avg_ms")
+
+    for name, ip in CONFIG.get("lan_targets", {}).items():
+        res = probes.ping(ip, count=3)
+        res["ip"] = ip
+        rec("lan_ping", name, res, "avg_ms")
+
     for host in ("1.1.1.1", "8.8.8.8"):
         rec("wan_ping", host, probes.ping(host, count=3), "avg_ms")
 
@@ -55,6 +82,27 @@ def run_cycle(conn, source=SOURCE):
 
     rec("http", "gstatic", probes.http_check(), "ms")
     return recorded
+
+
+_HOP2 = {"ip": None, "next_try": 0.0}
+
+
+def _hop2_ip(conn):
+    """The ISP box's IP. Discovered via traceroute once, then cached; falls back to the
+    last value recorded in the DB so the probe keeps running during an outage."""
+    if _HOP2["ip"]:
+        return _HOP2["ip"]
+    if time.time() < _HOP2["next_try"]:
+        return None
+    _HOP2["next_try"] = time.time() + 3600
+    ip = probes.get_hop2()
+    if not ip:
+        row = conn.execute(
+            "SELECT target FROM samples WHERE probe='hop2_ping' ORDER BY ts DESC LIMIT 1"
+        ).fetchone()
+        ip = row[0] if row else None
+    _HOP2["ip"] = ip
+    return ip
 
 
 def run_speedtest(conn, source=SOURCE):
@@ -87,6 +135,7 @@ def diagnose(latest, source=None):
     """Turn the latest samples into per-component levels and a plain-language verdict."""
     wifi = _get(latest, "wifi", source=source)
     router = _get(latest, "gateway_ping", source=source)
+    hop2 = _get(latest, "hop2_ping", source=source)
     wan1 = _get(latest, "wan_ping", "1.1.1.1", source)
     wan8 = _get(latest, "wan_ping", "8.8.8.8", source)
     dns_sys = _get(latest, "dns", "system", source)
@@ -121,6 +170,7 @@ def diagnose(latest, source=None):
                warn_test=lambda s: (s.get("detail") or {}).get("loss_pct", 0) >= ROUTER_LOSS_WARN
                or (s["value"] or 0) >= ROUTER_MS_WARN,
                label="{v:.0f} ms")
+    lh2 = level("isp_box", hop2, label="{v:.0f} ms") if hop2 else None
     wan_levels = [level("internet", wan1, label="{v:.0f} ms")]
     if wan8 and (not wan1 or not wan1["ok"]):
         wan_levels.append(level("internet", wan8, label="{v:.0f} ms"))
@@ -133,12 +183,30 @@ def diagnose(latest, source=None):
                warn_test=lambda s: (s["value"] or 0) >= DNS_MS_WARN, label="{v:.0f} ms")
     lh = level("http", http, label="{v:.0f} ms")
 
+    lan_bad = []
+    for s in latest:
+        if s["probe"] == "lan_ping" and (source is None or s["source"] == source):
+            if s["ok"]:
+                comp["lan_" + s["target"]] = {"level": "ok", "label": f"{s['value']:.0f} ms",
+                                              "sample": s}
+            else:
+                err = (s.get("detail") or {}).get("error", "failed")
+                comp["lan_" + s["target"]] = {"level": "bad", "label": str(err), "sample": s}
+                lan_bad.append(s["target"])
+
     # Verdict: walk the stack from the radio outwards.
     if lw == "bad":
         verdict = ("bad", "Not connected to WiFi.")
     elif lr == "bad":
         verdict = ("bad", "Connected to WiFi but can't reach the router — "
-                          "WiFi link problem or router is down/hung.")
+                          "WiFi link problem or the router is down/hung.")
+    elif lh2 == "bad":
+        verdict = ("bad", "Your router is up but the ISP box behind it isn't responding — "
+                          "reboot the ISP box (not the router) and check the cable between them.")
+    elif li == "bad" and lh2 == "ok":
+        verdict = ("bad", "Both routers are reachable but the internet beyond the ISP box is "
+                          "down — fibre/ISP problem. Rebooting your router won't help; "
+                          "try the fibre box, otherwise it's on the ISP.")
     elif li == "bad":
         verdict = ("bad", "Router is reachable but the internet isn't — modem/ISP side, "
                           "or the router's WAN session died (this is the case a reboot often fixes).")
@@ -159,6 +227,9 @@ def diagnose(latest, source=None):
         verdict = ("warn", "Working, but WiFi signal is weak.")
     elif "warn" in (ls, lrt, ld):
         verdict = ("warn", "Working, but DNS is slow.")
+    elif lan_bad:
+        verdict = ("warn", f"Internet is fine, but {', '.join(lan_bad)} isn't responding — "
+                           f"its WiFi is dead until it gets a power-cycle.")
     else:
         verdict = ("ok", "All good.")
 

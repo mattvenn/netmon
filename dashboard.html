@@ -10,7 +10,7 @@
   --ink-1: #0b0b0b; --ink-2: #52514e; --ink-muted: #898781;
   --grid: #e1e0d9; --baseline: #c3c2b7; --border: rgba(11,11,11,0.10);
   --c-router: #2a78d6; --c-cf: #1baf7a; --c-goog: #eda100;
-  --c-sys: #e87ba4; --c-down: #008300; --c-up: #eb6834; --c-rssi: #4a3aa7;
+  --c-sys: #e87ba4; --c-down: #008300; --c-up: #eb6834; --c-rssi: #4a3aa7; --c-isp: #eb6834;
   --st-good: #0ca30c; --st-warn: #fab219; --st-serious: #ec835a; --st-crit: #d03b3b;
 }
 @media (prefers-color-scheme: dark) {
@@ -19,7 +19,7 @@
     --ink-1: #ffffff; --ink-2: #c3c2b7; --ink-muted: #898781;
     --grid: #2c2c2a; --baseline: #383835; --border: rgba(255,255,255,0.10);
     --c-router: #3987e5; --c-cf: #199e70; --c-goog: #c98500;
-    --c-sys: #d55181; --c-down: #008300; --c-up: #d95926; --c-rssi: #9085e9;
+    --c-sys: #d55181; --c-down: #008300; --c-up: #d95926; --c-rssi: #9085e9; --c-isp: #d95926;
   }
 }
 * { box-sizing: border-box; }
@@ -133,7 +133,7 @@ const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).
 const COLORS = () => ({
   router: css('--c-router'), cf: css('--c-cf'), goog: css('--c-goog'),
   sys: css('--c-sys'), down: css('--c-down'), up: css('--c-up'),
-  rssi: css('--c-rssi'), muted: css('--ink-muted')
+  rssi: css('--c-rssi'), isp: css('--c-isp'), muted: css('--ink-muted')
 });
 
 let rangeH = 6, source = null, history = [], status = null;
@@ -177,7 +177,7 @@ function bannerError() {
 
 // ---------------- status row ----------------
 const TILE_DEFS = [
-  ['wifi', 'WiFi'], ['router', 'Router'], ['internet', 'Internet'],
+  ['wifi', 'WiFi'], ['router', 'Router'], ['isp_box', 'ISP box'], ['internet', 'Internet'],
   ['dns_system', 'DNS (system)'], ['dns_router', 'DNS (router)'],
   ['dns_direct', 'DNS (direct)'], ['http', 'Web fetch'], ['speed', 'Speed']
 ];
@@ -192,7 +192,12 @@ function renderStatus() {
 
   const tiles = $('tiles');
   tiles.textContent = '';
-  for (const [key, label] of TILE_DEFS) {
+  const defs = [...TILE_DEFS];
+  for (const key of Object.keys(status.components || {}).sort())
+    if (key.startsWith('lan_')) defs.push([key, key.slice(4)]);
+  for (const [key, label] of defs) {
+    // isp_box only exists on double-NAT networks — skip the tile when absent
+    if (key === 'isp_box' && !(status.components && status.components.isp_box)) continue;
     let level = 'unknown', val = '—', sub = '';
     if (key === 'speed') {
       const d = status.last_speed && status.last_speed.speed_down;
@@ -264,14 +269,18 @@ function renderCharts() {
   if (!source) return;
   const loss = r => (r.detail && r.detail.loss_pct != null) ? r.detail.loss_pct : (r.ok ? 0 : 100);
 
+  const hop2 = pick('hop2_ping');
   chartCard(box, 'Latency', 'ms', [
     {name: 'router', color: C.router, ...seriesOf(pick('gateway_ping'))},
+    ...(hop2.length ? [{name: 'ISP box', color: C.isp, ...seriesOf(hop2)}] : []),
     {name: '1.1.1.1', color: C.cf, ...seriesOf(pick('wan_ping', '1.1.1.1'))},
     {name: '8.8.8.8', color: C.goog, ...seriesOf(pick('wan_ping', '8.8.8.8'))}
   ], {fmt: fmt.ms, zero: true});
 
   chartCard(box, 'Packet loss', '%', [
     {name: 'router', color: C.router, pts: pick('gateway_ping').map(r => ({t: r.ts*1000, v: loss(r)})), fails: []},
+    ...(hop2.length ? [{name: 'ISP box', color: C.isp,
+        pts: hop2.map(r => ({t: r.ts*1000, v: loss(r)})), fails: []}] : []),
     {name: '1.1.1.1', color: C.cf, pts: pick('wan_ping','1.1.1.1').map(r => ({t: r.ts*1000, v: loss(r)})), fails: []},
     {name: '8.8.8.8', color: C.goog, pts: pick('wan_ping','8.8.8.8').map(r => ({t: r.ts*1000, v: loss(r)})), fails: []}
   ], {fmt: fmt.pct, zero: true, max: 100});
@@ -294,7 +303,16 @@ function renderCharts() {
   chartCard(box, 'Bandwidth', 'Mbps', [
     {name: 'download', color: C.down, ...seriesOf(pick('speed_down'))},
     {name: 'upload', color: C.up, ...seriesOf(pick('speed_up'))}
-  ], {fmt: fmt.mbps, zero: true, markers: true});
+  ], {fmt: fmt.mbps, zero: true, markers: true, gapMs: 40 * 60e3}); // speed tests are 15 min apart
+
+  const lanTargets = [...new Set(pick('lan_ping').map(r => r.target))].sort();
+  if (lanTargets.length) {
+    const lanColors = [C.rssi, C.sys, C.goog, C.cf];
+    chartCard(box, 'LAN devices', 'ms', lanTargets.map((t, i) => ({
+      name: t, color: lanColors[i % lanColors.length],
+      ...seriesOf(pick('lan_ping', t))
+    })), {fmt: fmt.ms, zero: true});
+  }
 
   // draw after every card is in the grid, so each holder has its final width
   for (const job of drawQueue) drawChart(...job);
@@ -366,7 +384,7 @@ function drawChart(holder, series, opts) {
   }
   el('line', {x1: M.l, x2: W - M.r, y1: H - M.b, y2: H - M.b, stroke: css('--baseline'), 'stroke-width': 1});
 
-  const gapMs = Math.max(3 * 30000, (now - t0) / 120);
+  const gapMs = opts.gapMs || Math.max(3 * 30000, (now - t0) / 120);
   for (const s of series) {
     let d = '', prev = null;
     for (const p of s.pts) {
