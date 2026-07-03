@@ -1,5 +1,7 @@
 # netmon — home network monitor
 
+[![Made with Claude](https://img.shields.io/badge/Made%20with-Claude-D97757?logo=anthropic&logoColor=white)](https://claude.com/claude-code)
+
 Figures out *which layer* of the home network is misbehaving: the Mac's WiFi,
 the router, the router's DNS, or the ISP. A collector measures the network
 every 30 seconds into SQLite; a dashboard shows a plain-language verdict and

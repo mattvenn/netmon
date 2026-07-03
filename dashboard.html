@@ -303,7 +303,7 @@ function renderCharts() {
   chartCard(box, 'Bandwidth', 'Mbps', [
     {name: 'download', color: C.down, ...seriesOf(pick('speed_down'))},
     {name: 'upload', color: C.up, ...seriesOf(pick('speed_up'))}
-  ], {fmt: fmt.mbps, zero: true, markers: true, gapMs: 40 * 60e3}); // speed tests are 15 min apart
+  ], {fmt: fmt.mbps, zero: true, markers: true, gapMs: Infinity}); // sparse by nature: always connect the dots
 
   const lanTargets = [...new Set(pick('lan_ping').map(r => r.target))].sort();
   if (lanTargets.length) {
