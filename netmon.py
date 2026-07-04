@@ -166,6 +166,21 @@ def run_router_probe(conn, source=SOURCE):
     db.insert(conn, source, "router_clients", host, True, len(clients),
               {"clients": clients})
 
+    # Per-device WAN usage from Traffic Analyzer (only if it's on + has USB storage).
+    try:
+        by_mac = {c["mac"].upper(): c for c in clients}
+        traffic = r.client_traffic(time.time())
+        if traffic:
+            for t in traffic:
+                c = by_mac.get(t["mac"], {})
+                t["name"] = c.get("name") or c.get("mac", t["mac"])
+                t["ip"] = c.get("ip", "")
+            traffic.sort(key=lambda t: -(t["down_mb"] + t["up_mb"]))
+            db.insert(conn, source, "client_traffic", host, True, len(traffic),
+                      {"clients": traffic})
+    except Exception:
+        pass  # TA disabled or no data — non-fatal
+
     for line in _append_router_log(log_lines):
         for kind, pat in ROUTER_EVENT_PATTERNS.items():
             if re.search(pat, line, re.IGNORECASE):

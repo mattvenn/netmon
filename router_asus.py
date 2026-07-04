@@ -88,6 +88,21 @@ class AsusRouter:
             res[m.group(1)] = {"rx": int(m.group(2), 16), "tx": int(m.group(3), 16)}
         return res
 
+    def client_traffic(self, epoch, dura=24):
+        """Per-client WAN usage from Traffic Analyzer (needs it enabled + USB storage).
+        Returns [{mac, down_mb, up_mb}] for the trailing `dura` hours. Empty if TA has no data."""
+        out = self._get(f"/getAppTraffic.asp?client=all&mode=detail&dura={dura}&date={int(epoch)}")
+        m = re.search(r"array_statistics\s*=\s*(\[.*\]);", out, re.S)
+        if not m:
+            return []
+        rows = []
+        for entry in __import__("json").loads(m.group(1)):
+            if len(entry) == 3 and isinstance(entry[0], str) and ":" in entry[0]:
+                rows.append({"mac": entry[0].upper(),
+                             "down_mb": round(entry[2] / 1e6, 2),
+                             "up_mb": round(entry[1] / 1e6, 2)})
+        return rows
+
     def syslog_lines(self):
         html = self._get("/Main_LogStatus_Content.asp")
         m = re.search(r"<textarea[^>]*>(.*?)</textarea>", html, re.S)
