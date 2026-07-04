@@ -308,7 +308,7 @@ function renderCharts() {
     ...(hop2.length ? [{name: 'ISP box', color: C.isp, ...seriesOf(hop2)}] : []),
     {name: '1.1.1.1', color: C.cf, ...seriesOf(pick('wan_ping', '1.1.1.1'))},
     {name: '8.8.8.8', color: C.goog, ...seriesOf(pick('wan_ping', '8.8.8.8'))}
-  ], {fmt: fmt.ms, zero: true});
+  ], {fmt: fmt.ms, zero: true, clip: 0.95});
 
   chartCard(box, 'Packet loss', '%', [
     {name: 'router', color: C.router, pts: pick('gateway_ping').map(r => ({t: r.ts*1000, v: loss(r)})), fails: []},
@@ -322,7 +322,7 @@ function renderCharts() {
     {name: 'system', color: C.sys, ...seriesOf(pick('dns', 'system'))},
     {name: 'via router', color: C.router, ...seriesOf(pick('dns', 'router'))},
     {name: 'direct 1.1.1.1', color: C.cf, ...seriesOf(pick('dns', 'direct'))}
-  ], {fmt: fmt.ms, zero: true});
+  ], {fmt: fmt.ms, zero: true, clip: 0.95});
 
   chartCard(box, 'WiFi signal', 'dBm', [
     {name: 'signal', color: C.rssi, ...seriesOf(pick('wifi'))},
@@ -337,7 +337,7 @@ function renderCharts() {
   chartCard(box, 'Bandwidth', 'Mbps', [
     {name: 'download', color: C.down, ...seriesOf(pick('speed_down'))},
     {name: 'upload', color: C.up, ...seriesOf(pick('speed_up'))}
-  ], {fmt: fmt.mbps, zero: true, dashes: true}); // 15-min-wide dash per test; blanks where none
+  ], {fmt: fmt.mbps, zero: true, markers: true, gapMs: 25 * 60e3}); // join 15-min tests; break on sleep gaps
 
   const lanTargets = [...new Set(pick('lan_ping').map(r => r.target))].sort();
   if (lanTargets.length) {
@@ -462,13 +462,22 @@ function drawChart(holder, series, opts) {
   const now = Date.now(), t0 = now - rangeH * 3600 * 1000;
   const X = t => M.l + (t - t0) / (now - t0) * iw;
 
-  let vmin = Infinity, vmax = -Infinity;
-  for (const s of series) for (const p of s.pts) { if (p.v < vmin) vmin = p.v; if (p.v > vmax) vmax = p.v; }
+  let vmin = Infinity, vmax = -Infinity, allv = [];
+  for (const s of series) for (const p of s.pts) {
+    if (p.v < vmin) vmin = p.v; if (p.v > vmax) vmax = p.v; allv.push(p.v);
+  }
   if (!isFinite(vmin)) { vmin = 0; vmax = 1; }
   if (opts.zero) vmin = Math.min(0, vmin);
+  // clip the axis to a percentile so one huge spike doesn't flatten everything;
+  // out-of-range points are drawn hitting the top edge (they "poke out").
+  if (opts.clip && allv.length > 4) {
+    allv.sort((a, b) => a - b);
+    vmax = Math.max(vmin + 1, allv[Math.floor(opts.clip * (allv.length - 1))]);
+  }
   if (opts.max != null) vmax = Math.max(vmax, 1); else if (vmax === vmin) vmax = vmin + 1;
   const [ymin, ymax, ticks] = niceScale(vmin, vmax, opts.max);
   const Y = v => M.t + ih - (v - ymin) / (ymax - ymin) * ih;
+  const Yc = v => Math.max(M.t, Math.min(H - M.b, Y(v)));  // clamped into the plot area
 
   const NS = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(NS, 'svg');
@@ -498,24 +507,35 @@ function drawChart(holder, series, opts) {
   const gapMs = opts.gapMs || Math.max(3 * 30000, (now - t0) / 120);
   for (const s of series) {
     if (opts.dashes) {
-      // sparse discrete samples: draw each as a fixed-width horizontal dash, no lines between
+      // sparse discrete samples: a dash per sample, no lines between. Width caps at
+      // 15 min but shrinks to the midpoints of neighbours so clustered tests don't overlap.
       const halfMs = (opts.dashMs || 15 * 60e3) / 2;
-      for (const p of s.pts)
-        el('line', {x1: X(p.t - halfMs), x2: X(p.t + halfMs), y1: Y(p.v), y2: Y(p.v),
-                    stroke: s.color, 'stroke-width': 2.5, 'stroke-linecap': 'round'});
+      const pts = s.pts;
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i];
+        let l = p.t - halfMs, r = p.t + halfMs;
+        if (i > 0) l = Math.max(l, (pts[i - 1].t + p.t) / 2);
+        if (i < pts.length - 1) r = Math.min(r, (p.t + pts[i + 1].t) / 2);
+        el('line', {x1: X(l), x2: X(r), y1: Yc(p.v), y2: Yc(p.v),
+                    stroke: s.color, 'stroke-width': 2.5, 'stroke-linecap': 'butt'});
+      }
     } else {
       let d = '', prev = null;
       for (const p of s.pts) {
-        d += (prev && p.t - prev.t < gapMs ? 'L' : 'M') + X(p.t).toFixed(1) + ',' + Y(p.v).toFixed(1);
+        d += (prev && p.t - prev.t < gapMs ? 'L' : 'M') + X(p.t).toFixed(1) + ',' + Yc(p.v).toFixed(1);
         prev = p;
       }
       if (d) el('path', {d, fill: 'none', stroke: s.color, 'stroke-width': 2,
                          'stroke-linejoin': 'round', 'stroke-linecap': 'round'});
       if (opts.markers) for (const p of s.pts)
-        el('circle', {cx: X(p.t), cy: Y(p.v), r: 4, fill: s.color, stroke: css('--surface-1'), 'stroke-width': 2});
+        el('circle', {cx: X(p.t), cy: Yc(p.v), r: 4, fill: s.color, stroke: css('--surface-1'), 'stroke-width': 2});
       const last = s.pts[s.pts.length - 1];
-      if (last) el('circle', {cx: X(last.t), cy: Y(last.v), r: 4, fill: s.color, stroke: css('--surface-1'), 'stroke-width': 2});
+      if (last) el('circle', {cx: X(last.t), cy: Yc(last.v), r: 4, fill: s.color, stroke: css('--surface-1'), 'stroke-width': 2});
     }
+    // mark points that exceed the clipped axis with a small triangle at the top edge
+    for (const p of s.pts)
+      if (Y(p.v) < M.t - 0.5)
+        el('path', {d: `M${X(p.t)},${M.t} l3,5 l-6,0 z`, fill: s.color});
     for (const f of s.fails)
       el('line', {x1: X(f.t), x2: X(f.t), y1: M.t, y2: M.t + 7, stroke: css('--st-crit'), 'stroke-width': 2});
   }
