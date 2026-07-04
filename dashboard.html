@@ -308,7 +308,7 @@ function renderCharts() {
     ...(hop2.length ? [{name: 'ISP box', color: C.isp, ...seriesOf(hop2)}] : []),
     {name: '1.1.1.1', color: C.cf, ...seriesOf(pick('wan_ping', '1.1.1.1'))},
     {name: '8.8.8.8', color: C.goog, ...seriesOf(pick('wan_ping', '8.8.8.8'))}
-  ], {fmt: fmt.ms, zero: true, clip: 0.95});
+  ], {fmt: fmt.ms, zero: true, clipMax: 100});
 
   chartCard(box, 'Packet loss', '%', [
     {name: 'router', color: C.router, pts: pick('gateway_ping').map(r => ({t: r.ts*1000, v: loss(r)})), fails: []},
@@ -322,7 +322,7 @@ function renderCharts() {
     {name: 'system', color: C.sys, ...seriesOf(pick('dns', 'system'))},
     {name: 'via router', color: C.router, ...seriesOf(pick('dns', 'router'))},
     {name: 'direct 1.1.1.1', color: C.cf, ...seriesOf(pick('dns', 'direct'))}
-  ], {fmt: fmt.ms, zero: true, clip: 0.95});
+  ], {fmt: fmt.ms, zero: true, clipMax: 100});
 
   chartCard(box, 'WiFi signal', 'dBm', [
     {name: 'signal', color: C.rssi, ...seriesOf(pick('wifi'))},
@@ -468,9 +468,11 @@ function drawChart(holder, series, opts) {
   }
   if (!isFinite(vmin)) { vmin = 0; vmax = 1; }
   if (opts.zero) vmin = Math.min(0, vmin);
-  // clip the axis to a percentile so one huge spike doesn't flatten everything;
-  // out-of-range points are drawn hitting the top edge (they "poke out").
-  if (opts.clip && allv.length > 4) {
+  // clip the axis so one huge spike doesn't flatten everything; out-of-range points
+  // are drawn hitting the top edge (they "poke out"). clipMax = fixed ceiling; clip = percentile.
+  if (opts.clipMax != null) {
+    vmax = opts.clipMax;
+  } else if (opts.clip && allv.length > 4) {
     allv.sort((a, b) => a - b);
     vmax = Math.max(vmin + 1, allv[Math.floor(opts.clip * (allv.length - 1))]);
   }
