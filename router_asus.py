@@ -79,6 +79,15 @@ class AsusRouter:
                         "conn": conn_names.get(v.get("isWL"), v.get("isWL"))})
         return out
 
+    def netdev(self):
+        """Cumulative per-interface byte counters. asuswrt returns hex; counters may be
+        32-bit and wrap. Keys: INTERNET (WAN), WIRED, WIRELESS0 (2.4GHz), WIRELESS1 (5GHz)."""
+        out = self._appget("netdev(appobj)")
+        res = {}
+        for m in re.finditer(r"'(\w+)':\{rx:0x([0-9a-fA-F]+),tx:0x([0-9a-fA-F]+)\}", out):
+            res[m.group(1)] = {"rx": int(m.group(2), 16), "tx": int(m.group(3), 16)}
+        return res
+
     def syslog_lines(self):
         html = self._get("/Main_LogStatus_Content.asp")
         m = re.search(r"<textarea[^>]*>(.*?)</textarea>", html, re.S)

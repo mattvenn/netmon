@@ -176,14 +176,64 @@ def _append_router_log(lines):
     return new
 
 
+def _router_netdev():
+    """Best-effort per-interface counters from the router; None if unavailable."""
+    if not CONFIG.get("router"):
+        return None
+    try:
+        import router_asus
+        cfg = CONFIG["router"]
+        if _ROUTER["client"] is None:
+            _ROUTER["client"] = router_asus.AsusRouter(cfg["host"], cfg["user"], cfg["pass"])
+        return _ROUTER["client"].netdev()
+    except Exception:
+        return None
+
+
+def _counter_delta(before, after):
+    """after - before, correcting a single 32-bit counter wrap."""
+    d = after - before
+    return d if d >= 0 else d + (1 << 32)
+
+
 def run_speedtest(conn, source=SOURCE):
+    nd0 = _router_netdev()
+    t0 = time.monotonic()
     down = probes.speed_download()
     up = probes.speed_upload()
+    window = time.monotonic() - t0
+
+    contention = None
+    nd1 = _router_netdev() if nd0 else None
+    if nd0 and nd1 and "INTERNET" in nd0 and "INTERNET" in nd1:
+        wan_rx = _counter_delta(nd0["INTERNET"]["rx"], nd1["INTERNET"]["rx"])
+        our_bytes = down.get("bytes") or 0  # WAN rx counts downloads only; upload is WAN tx
+        seg_tx = {seg: round(_counter_delta(nd0[seg]["tx"], nd1[seg]["tx"]) / 1e6, 1)
+                  for seg in ("WIRED", "WIRELESS0", "WIRELESS1") if seg in nd0 and seg in nd1}
+        # our download lands on this Mac's own segment; strip it so seg_tx shows *other* load
+        contention = {
+            "wan_rx_mb": round(wan_rx / 1e6, 1),
+            "other_down_mb": round(max(0, wan_rx - our_bytes) / 1e6, 1),
+            "seg_tx_mb": seg_tx,
+            "window_s": round(window, 1),
+        }
+        if down.get("ok") and contention["other_down_mb"] > 30:
+            busiest = max(seg_tx, key=seg_tx.get) if seg_tx else "?"
+            db.insert(conn, source, "router_event", "contention", False, None,
+                      {"line": f"speed test saw {contention['other_down_mb']:.0f} MB of other "
+                               f"downstream traffic (busiest segment: {SEG_NAMES.get(busiest, busiest)})"})
+
+    down_detail = dict(down)
+    if contention:
+        down_detail["contention"] = contention
     db.insert(conn, source, "speed_down", "cloudflare", down.get("ok", False),
-              down.get("mbps"), down)
+              down.get("mbps"), down_detail)
     db.insert(conn, source, "speed_up", "cloudflare", up.get("ok", False),
               up.get("mbps"), up)
-    return {"down": down, "up": up}
+    return {"down": down, "up": up, "contention": contention}
+
+
+SEG_NAMES = {"WIRED": "wired", "WIRELESS0": "2.4GHz WiFi", "WIRELESS1": "5GHz WiFi"}
 
 
 # ---------------------------------------------------------------- diagnosis

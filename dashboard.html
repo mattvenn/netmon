@@ -204,7 +204,14 @@ function renderStatus() {
       const d = status.last_speed && status.last_speed.speed_down;
       const u = status.last_speed && status.last_speed.speed_up;
       if (d) { level = d.ok ? 'ok' : 'bad'; val = d.ok ? '↓' + d.value.toFixed(0) + (u && u.ok ? ' ↑' + u.value.toFixed(0) : '') : 'failed';
-               sub = d.ok ? 'Mbps, ' + fmt.time(d.ts * 1000) : ''; }
+               sub = d.ok ? 'Mbps, ' + fmt.time(d.ts * 1000) : '';
+               const ct = d.detail && d.detail.contention;
+               if (ct && ct.other_down_mb > 30) {
+                 level = 'warn';
+                 const seg = Object.entries(ct.seg_tx_mb || {}).sort((a,b)=>b[1]-a[1])[0];
+                 const segName = seg ? ({WIRED:'wired',WIRELESS0:'2.4G',WIRELESS1:'5G'}[seg[0]]||seg[0]) : '?';
+                 sub = '⚠ ' + ct.other_down_mb.toFixed(0) + ' MB other traffic (' + segName + ')';
+               } }
     } else {
       const c = status.components && status.components[key];
       if (c) {
