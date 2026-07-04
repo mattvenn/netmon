@@ -24,9 +24,6 @@ DEFAULT_PORT = 8737
 DEFAULT_INTERVAL = 30
 DEFAULT_SPEED_INTERVAL = 15 * 60
 
-SOURCE = socket.gethostname().split(".")[0]
-
-
 def load_config():
     """Optional machine-specific config.json next to this file.
     Keys: lan_targets — {name: ip} of LAN devices to ping each cycle (e.g. an extender)."""
@@ -41,6 +38,26 @@ def load_config():
 
 
 CONFIG = load_config()
+
+
+def _stable_source():
+    """A source name that doesn't drift. config.json wins; else the OS's *fixed*
+    hostname (macOS gethostname() changes with network state, so avoid it there)."""
+    if CONFIG.get("source"):
+        return CONFIG["source"]
+    if os.uname().sysname == "Darwin":
+        try:
+            import subprocess
+            name = subprocess.run(["scutil", "--get", "LocalHostName"],
+                                  capture_output=True, text=True, timeout=5).stdout.strip()
+            if name:
+                return name
+        except Exception:
+            pass
+    return socket.gethostname().split(".")[0]
+
+
+SOURCE = _stable_source()
 
 
 def run_cycle(conn, source=SOURCE):

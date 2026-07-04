@@ -49,10 +49,15 @@ Machine-specific targets go in a `config.json` next to `netmon.py` (gitignored,
 
 ```json
 {
+  "source": "Mac",
   "lan_targets": { "extender": "192.168.2.184" },
   "router": { "host": "192.168.2.1", "user": "admin", "pass": "…", "interval": 300 }
 }
 ```
+
+`source` names this machine in the dashboard's source switcher. Set it —
+macOS's `gethostname()` drifts with network state, so without a fixed name the
+same laptop can split into two sources in the history.
 
 With a `router` block (Asus/asuswrt only), every 5 minutes netmon also asks the
 router itself: uptime (detects self-reboots), WAN state as the router sees it,
