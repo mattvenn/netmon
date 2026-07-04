@@ -261,6 +261,19 @@ function seriesOf(rows, valueFn) {
 }
 
 let drawQueue = [];
+function bandChanges(wifiRows) {
+  // consecutive samples where band or channel changed, e.g. 2GHz ch7 -> 5GHz ch44
+  const out = [];
+  let prev = null;
+  for (const r of wifiRows) {
+    if (!r.ok || !r.detail || r.detail.band == null) continue;
+    const cur = r.detail.band + ' ch' + (r.detail.channel ?? '?');
+    if (prev && cur !== prev) out.push({t: r.ts * 1000, from: prev, to: cur});
+    prev = cur;
+  }
+  return out;
+}
+
 function renderCharts() {
   const C = COLORS();
   const box = $('charts');
@@ -295,7 +308,8 @@ function renderCharts() {
     {name: 'signal', color: C.rssi, ...seriesOf(pick('wifi'))},
     {name: 'noise', color: C.muted, pts: pick('wifi').filter(r => r.ok && r.detail && r.detail.noise_dbm != null)
         .map(r => ({t: r.ts*1000, v: r.detail.noise_dbm})), fails: []}
-  ], {fmt: fmt.dbm, extraTip: t => {
+  ], {fmt: fmt.dbm, events: bandChanges(pick('wifi')).map(c => ({t: c.t, label: '→ ' + c.to})),
+      extraTip: t => {
       const r = nearest(pick('wifi'), t);
       return r && r.detail ? (r.detail.band || '') + ' ch' + (r.detail.channel ?? '?') + ' · link ' + (r.detail.rate_mbps ?? '?') + ' Mbps' : '';
   }});
@@ -401,6 +415,23 @@ function drawChart(holder, series, opts) {
       el('line', {x1: X(f.t), x2: X(f.t), y1: M.t, y2: M.t + 7, stroke: css('--st-crit'), 'stroke-width': 2});
   }
 
+  // event markers (e.g. wifi band changes): full-height line + label at the top
+  let lastLabelEnd = -Infinity;
+  for (const evd of (opts.events || [])) {
+    if (evd.t < t0 || evd.t > now) continue;
+    const x = X(evd.t);
+    el('line', {x1: x, x2: x, y1: M.t, y2: H - M.b, stroke: css('--ink-muted'),
+                'stroke-width': 1, opacity: 0.7});
+    if (x > lastLabelEnd + 8) {
+      const w = evd.label.length * 5;
+      const flip = x + 3 + w > W - M.r;   // near the right edge: put the label left of the line
+      const tx = el('text', {x: flip ? x - 3 : x + 3, y: M.t + 8, 'font-size': 9,
+                             fill: css('--ink-2'), 'text-anchor': flip ? 'end' : 'start'});
+      tx.textContent = evd.label;
+      lastLabelEnd = flip ? x : x + 3 + w;
+    }
+  }
+
   // hover layer
   const cross = el('line', {x1: 0, x2: 0, y1: M.t, y2: H - M.b, stroke: css('--baseline'),
                             'stroke-width': 1, visibility: 'hidden'});
@@ -470,7 +501,11 @@ function timeTicks(t0, t1) {
 function renderEvents() {
   const box = $('events');
   box.textContent = '';
-  const rows = history.filter(r => !r.ok || r.probe.startsWith('speed') || r.probe.startsWith('phone_')).slice(-80).reverse();
+  const changes = bandChanges(history.filter(r => r.probe === 'wifi' && r.source === source))
+    .map(c => ({ts: c.t / 1000, ok: true, source, probe: 'band change',
+                target: c.from + ' → ' + c.to, value: null, detail: null}));
+  const rows = history.filter(r => !r.ok || r.probe.startsWith('speed') || r.probe.startsWith('phone_'))
+    .concat(changes).sort((a, b) => a.ts - b.ts).slice(-80).reverse();
   const table = document.createElement('table');
   const thead = document.createElement('tr');
   for (const h of ['status', 'time', 'source', 'probe', 'target', 'value', 'detail']) {
