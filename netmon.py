@@ -10,6 +10,7 @@ Commands:
 import argparse
 import json
 import os
+import re
 import socket
 import threading
 import time
@@ -105,6 +106,76 @@ def _hop2_ip(conn):
     return ip
 
 
+_ROUTER = {"client": None, "last_uptime": None}
+ROUTER_LOG = os.path.join(BASE, "logs", "router-syslog.log")
+ROUTER_EVENT_RE = None  # built on first use from the patterns below
+ROUTER_EVENT_PATTERNS = {
+    "wan_down": r"Ethernet link down|did not function properly",
+    "wan_up": r"Ethernet link up|WAN was restored",
+    "wifi": r"deauth|disassoc|assoc fail|roam.*fail",
+    "dhcp": r"DHCPS?:?.*(?:offer|decline|nak)",
+}
+
+
+def run_router_probe(conn, source=SOURCE):
+    """Ask the router itself: uptime (reboot detection), WAN state as it sees it,
+    per-client radio view, and its syslog (archived + notable events extracted)."""
+    cfg = CONFIG.get("router")
+    if not cfg:
+        return None
+    import router_asus
+    host = cfg.get("host", "192.168.2.1")
+    if _ROUTER["client"] is None:
+        _ROUTER["client"] = router_asus.AsusRouter(host, cfg["user"], cfg["pass"])
+    r = _ROUTER["client"]
+    try:
+        up = r.uptime_secs()
+        wan = r.wan()
+        clients = r.clients()
+        log_lines = r.syslog_lines()
+    except Exception as e:
+        db.insert(conn, source, "router_api", host, False, None,
+                  {"error": f"{type(e).__name__}: {e}"[:150]})
+        return False
+
+    db.insert(conn, source, "router_uptime", host, True, up)
+    if up and _ROUTER["last_uptime"] and up < _ROUTER["last_uptime"]:
+        db.insert(conn, source, "router_event", "reboot", False, None,
+                  {"line": f"router rebooted (uptime {_ROUTER['last_uptime']}s -> {up}s)"})
+    _ROUTER["last_uptime"] = up
+
+    db.insert(conn, source, "router_wan", wan.get("ipaddr") or "?",
+              wan.get("status") == "1", None, wan)
+    db.insert(conn, source, "router_clients", host, True, len(clients),
+              {"clients": clients})
+
+    for line in _append_router_log(log_lines):
+        for kind, pat in ROUTER_EVENT_PATTERNS.items():
+            if re.search(pat, line, re.IGNORECASE):
+                db.insert(conn, source, "router_event", kind,
+                          kind.endswith("_up"), None, {"line": line[:200]})
+                break
+    return True
+
+
+def _append_router_log(lines):
+    """Persist the router's log locally (it rotates away) and return the new lines."""
+    os.makedirs(os.path.dirname(ROUTER_LOG), exist_ok=True)
+    try:
+        with open(ROUTER_LOG) as f:
+            old_last = f.read().splitlines()[-1]
+    except (FileNotFoundError, IndexError):
+        old_last = None
+    if old_last and old_last in lines:
+        new = lines[len(lines) - 1 - lines[::-1].index(old_last) + 1:]
+    else:
+        new = lines
+    if new:
+        with open(ROUTER_LOG, "a") as f:
+            f.write("\n".join(new) + "\n")
+    return new
+
+
 def run_speedtest(conn, source=SOURCE):
     down = probes.speed_download()
     up = probes.speed_upload()
@@ -171,6 +242,12 @@ def diagnose(latest, source=None):
                or (s["value"] or 0) >= ROUTER_MS_WARN,
                label="{v:.0f} ms")
     lh2 = level("isp_box", hop2, label="{v:.0f} ms") if hop2 else None
+    r_wan = _get(latest, "router_wan", source=source)
+    r_up = _get(latest, "router_uptime", source=source)
+    if r_wan:
+        level("router_wan", r_wan, label="{d[statusstr]}")
+    if r_up and r_up["ok"] and r_up["value"] and comp.get("router"):
+        comp["router"]["sub"] = f"up {r_up['value'] / 86400:.1f}d"
     wan_levels = [level("internet", wan1, label="{v:.0f} ms")]
     if wan8 and (not wan1 or not wan1["ok"]):
         wan_levels.append(level("internet", wan8, label="{v:.0f} ms"))
@@ -200,6 +277,9 @@ def diagnose(latest, source=None):
     elif lr == "bad":
         verdict = ("bad", "Connected to WiFi but can't reach the router — "
                           "WiFi link problem or the router is down/hung.")
+    elif r_wan and not r_wan["ok"]:
+        verdict = ("bad", "The router reports its WAN link to the ISP box is down — "
+                          "ISP box, or the cable between them. Rebooting the router won't help.")
     elif lh2 == "bad":
         verdict = ("bad", "Your router is up but the ISP box behind it isn't responding — "
                           "reboot the ISP box (not the router) and check the cable between them.")
@@ -245,11 +325,16 @@ def collector_loop(conn_path, lock, interval, speed_interval, stop):
     conn = db.connect(conn_path)
     last_speed = 0.0
     last_prune = 0.0
+    last_router = 0.0
+    router_interval = (CONFIG.get("router") or {}).get("interval", 300)
     while not stop.is_set():
         t0 = time.time()
         try:
             with lock:
                 run_cycle(conn)
+            if CONFIG.get("router") and time.time() - last_router >= router_interval:
+                run_router_probe(conn)
+                last_router = time.time()
             if speed_interval and time.time() - last_speed >= speed_interval:
                 with lock:
                     run_speedtest(conn)

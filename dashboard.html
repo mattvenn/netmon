@@ -176,8 +176,10 @@ function bannerError() {
 }
 
 // ---------------- status row ----------------
+const OPTIONAL_TILES = ['isp_box', 'router_wan'];  // only on networks that have them
 const TILE_DEFS = [
-  ['wifi', 'WiFi'], ['router', 'Router'], ['isp_box', 'ISP box'], ['internet', 'Internet'],
+  ['wifi', 'WiFi'], ['router', 'Router'], ['isp_box', 'ISP box'], ['router_wan', 'WAN link'],
+  ['internet', 'Internet'],
   ['dns_system', 'DNS (system)'], ['dns_router', 'DNS (router)'],
   ['dns_direct', 'DNS (direct)'], ['http', 'Web fetch'], ['speed', 'Speed']
 ];
@@ -196,8 +198,7 @@ function renderStatus() {
   for (const key of Object.keys(status.components || {}).sort())
     if (key.startsWith('lan_')) defs.push([key, key.slice(4)]);
   for (const [key, label] of defs) {
-    // isp_box only exists on double-NAT networks — skip the tile when absent
-    if (key === 'isp_box' && !(status.components && status.components.isp_box)) continue;
+    if (OPTIONAL_TILES.includes(key) && !(status.components && status.components[key])) continue;
     let level = 'unknown', val = '—', sub = '';
     if (key === 'speed') {
       const d = status.last_speed && status.last_speed.speed_down;
@@ -208,6 +209,7 @@ function renderStatus() {
       const c = status.components && status.components[key];
       if (c) {
         level = c.level; val = c.label || '—';
+        if (c.sub) sub = c.sub;
         if (key === 'wifi' && c.sample && c.sample.detail) {
           const d = c.sample.detail;
           sub = (d.band || '') + ' ch' + (d.channel ?? '?') + ' · ' + (d.rate_mbps ?? '?') + ' Mbps link';
@@ -504,7 +506,8 @@ function renderEvents() {
   const changes = bandChanges(history.filter(r => r.probe === 'wifi' && r.source === source))
     .map(c => ({ts: c.t / 1000, ok: true, source, probe: 'band change',
                 target: c.from + ' → ' + c.to, value: null, detail: null}));
-  const rows = history.filter(r => !r.ok || r.probe.startsWith('speed') || r.probe.startsWith('phone_'))
+  const rows = history.filter(r => !r.ok || r.probe.startsWith('speed') || r.probe.startsWith('phone_')
+                                        || r.probe === 'router_event')
     .concat(changes).sort((a, b) => a.ts - b.ts).slice(-80).reverse();
   const table = document.createElement('table');
   const thead = document.createElement('tr');

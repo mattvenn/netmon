@@ -44,11 +44,23 @@ read-mostly and LAN-only by assumption — don't port-forward it.
 
 Data lives in `netmon.db` (SQLite), pruned after 90 days.
 
-Machine-specific targets go in a `config.json` next to `netmon.py` (gitignored):
+Machine-specific targets go in a `config.json` next to `netmon.py` (gitignored,
+`chmod 600` it — it can hold the router admin password):
 
 ```json
-{ "lan_targets": { "extender": "192.168.2.184" } }
+{
+  "lan_targets": { "extender": "192.168.2.184" },
+  "router": { "host": "192.168.2.1", "user": "admin", "pass": "…", "interval": 300 }
+}
 ```
+
+With a `router` block (Asus/asuswrt only), every 5 minutes netmon also asks the
+router itself: uptime (detects self-reboots), WAN state as the router sees it,
+its per-client radio view (band + RSSI for every device), and its syslog — which
+is archived to `logs/router-syslog.log` before it rotates away, with notable
+lines (WAN link drops, deauths, DHCP trouble) surfaced in the dashboard events
+table. Note: the probe's API login can occasionally sign out a browser session
+on the router's admin UI.
 
 ## Reading the verdict
 
