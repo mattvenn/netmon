@@ -12,6 +12,8 @@
   --c-router: #2a78d6; --c-cf: #1baf7a; --c-goog: #eda100;
   --c-sys: #e87ba4; --c-down: #008300; --c-up: #eb6834; --c-rssi: #4a3aa7; --c-isp: #eb6834;
   --st-good: #0ca30c; --st-warn: #fab219; --st-serious: #ec835a; --st-crit: #d03b3b;
+  --cat-1:#2a78d6; --cat-2:#1baf7a; --cat-3:#eda100; --cat-4:#008300;
+  --cat-5:#4a3aa7; --cat-6:#e34948; --cat-7:#e87ba4; --cat-8:#898781;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -20,6 +22,8 @@
     --grid: #2c2c2a; --baseline: #383835; --border: rgba(255,255,255,0.10);
     --c-router: #3987e5; --c-cf: #199e70; --c-goog: #c98500;
     --c-sys: #d55181; --c-down: #008300; --c-up: #d95926; --c-rssi: #9085e9; --c-isp: #d95926;
+    --cat-1:#3987e5; --cat-2:#199e70; --cat-3:#c98500; --cat-4:#008300;
+    --cat-5:#9085e9; --cat-6:#e66767; --cat-7:#d55181; --cat-8:#898781;
   }
 }
 * { box-sizing: border-box; }
@@ -75,6 +79,12 @@ button.act:disabled { color: var(--ink-muted); cursor: wait; }
 .legend span { color: var(--ink-2); font-size: 11px; display: inline-flex; align-items: center; gap: 5px; }
 .legend i { width: 14px; height: 0; border-top: 3px solid; border-radius: 2px; }
 .chart { width: 100%; display: block; }
+.donut-row { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; padding-bottom: 6px; }
+.donut-legend { flex: 1; min-width: 130px; display: flex; flex-direction: column; gap: 3px; }
+.dl-row { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+.dl-sw { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+.dl-nm { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.dl-vl { color: var(--ink-1); font-weight: 600; font-variant-numeric: tabular-nums; }
 .loading .chart, .loading .tiles { opacity: 0.45; }
 .tooltip {
   position: fixed; pointer-events: none; z-index: 10; display: none;
@@ -145,6 +155,7 @@ const fmt = {
   pct: v => v == null ? '—' : v.toFixed(0) + '%',
   dbm: v => v == null ? '—' : Math.round(v) + ' dBm',
   mbps: v => v == null ? '—' : v.toFixed(1) + ' Mbps',
+  mbData: v => v == null ? '—' : (v >= 1024 ? (v / 1024).toFixed(1) + ' GB' : v.toFixed(v < 10 ? 1 : 0) + ' MB'),
   time: t => new Date(t).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}),
   timeS: t => new Date(t).toLocaleTimeString(),
   dayTime: t => new Date(t).toLocaleString([], {weekday:'short', hour:'2-digit', minute:'2-digit'})
@@ -326,7 +337,7 @@ function renderCharts() {
   chartCard(box, 'Bandwidth', 'Mbps', [
     {name: 'download', color: C.down, ...seriesOf(pick('speed_down'))},
     {name: 'upload', color: C.up, ...seriesOf(pick('speed_up'))}
-  ], {fmt: fmt.mbps, zero: true, markers: true, gapMs: Infinity}); // sparse by nature: always connect the dots
+  ], {fmt: fmt.mbps, zero: true, dashes: true}); // 15-min-wide dash per test; blanks where none
 
   const lanTargets = [...new Set(pick('lan_ping').map(r => r.target))].sort();
   if (lanTargets.length) {
@@ -337,9 +348,86 @@ function renderCharts() {
     })), {fmt: fmt.ms, zero: true});
   }
 
+  const ctRows = history.filter(r => r.probe === 'client_traffic' && r.source === source);
+  const ctLast = ctRows[ctRows.length - 1];
+  if (ctLast && ctLast.detail && ctLast.detail.clients) deviceDonut(box, ctLast.detail.clients);
+
   // draw after every card is in the grid, so each holder has its final width
   for (const job of drawQueue) drawChart(...job);
   drawQueue = [];
+}
+
+function deviceDonut(parent, clients) {
+  const cats = [1,2,3,4,5,6,7].map(i => css('--cat-' + i));
+  let items = clients.map(c => ({
+    name: (c.name || c.mac || '?') + (c.ip ? ' ·' + c.ip.split('.').pop() : ''),
+    value: (c.down_mb || 0) + (c.up_mb || 0)
+  })).filter(x => x.value > 0.05).sort((a, b) => b.value - a.value);
+  if (!items.length) return;
+  const top = items.slice(0, 7);
+  const rest = items.slice(7);
+  if (rest.length) top.push({name: 'Other (' + rest.length + ')', value: rest.reduce((s, x) => s + x.value, 0)});
+  top.forEach((s, i) => s.color = i < 7 ? cats[i] : css('--cat-8'));
+  const total = top.reduce((s, x) => s + x.value, 0) || 1;
+
+  const card = document.createElement('div'); card.className = 'card';
+  const h = document.createElement('h2'); h.textContent = 'Bandwidth by device (last 24h)'; card.append(h);
+  const row = document.createElement('div'); row.className = 'donut-row'; card.append(row);
+  parent.append(card);
+
+  const NS = 'http://www.w3.org/2000/svg';
+  const size = 168, cx = size / 2, cy = size / 2, rO = 72, rI = 44;
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${size} ${size}`);
+  svg.setAttribute('width', size); svg.setAttribute('height', size); svg.style.flex = 'none';
+  const tt = $('tt');
+  let a0 = -Math.PI / 2;
+  for (const s of top) {
+    const a1 = a0 + s.value / total * 2 * Math.PI;
+    const pt = (r, a) => [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+    const [x0, y0] = pt(rO, a0), [x1, y1] = pt(rO, a1), [x2, y2] = pt(rI, a1), [x3, y3] = pt(rI, a0);
+    const large = (a1 - a0) > Math.PI ? 1 : 0;
+    const path = document.createElementNS(NS, 'path');
+    path.setAttribute('d', `M${x0},${y0} A${rO},${rO} 0 ${large} 1 ${x1},${y1} L${x2},${y2} A${rI},${rI} 0 ${large} 0 ${x3},${y3} Z`);
+    path.setAttribute('fill', s.color);
+    path.setAttribute('stroke', css('--surface-1')); path.setAttribute('stroke-width', '2');
+    const pct = s.value / total * 100;
+    path.addEventListener('pointermove', ev => {
+      tt.textContent = '';
+      const t = document.createElement('div'); t.className = 'tt-t'; t.textContent = s.name; tt.append(t);
+      const r = document.createElement('div'); r.className = 'row';
+      const n = document.createElement('span'); n.className = 'n'; n.textContent = pct.toFixed(0) + '%';
+      const v = document.createElement('span'); v.className = 'v'; v.textContent = fmt.mbData(s.value);
+      r.append(n, v); tt.append(r);
+      tt.style.display = 'block';
+      tt.style.left = Math.min(ev.clientX + 14, window.innerWidth - 160) + 'px';
+      tt.style.top = (ev.clientY + 14) + 'px';
+    });
+    path.addEventListener('pointerleave', () => tt.style.display = 'none');
+    svg.append(path); a0 = a1;
+  }
+  const tot = fmt.mbData(total).split(' ');
+  const mk = (y, sz, fill, txt, w) => {
+    const t = document.createElementNS(NS, 'text');
+    t.setAttribute('x', cx); t.setAttribute('y', y); t.setAttribute('text-anchor', 'middle');
+    t.setAttribute('font-size', sz); t.setAttribute('fill', fill);
+    if (w) t.setAttribute('font-weight', w);
+    t.textContent = txt; svg.append(t);
+  };
+  mk(cy - 1, 16, css('--ink-1'), tot[0], 600);
+  mk(cy + 12, 9, css('--ink-muted'), tot[1] + ' total');
+  row.append(svg);
+
+  const leg = document.createElement('div'); leg.className = 'donut-legend';
+  for (const s of top) {
+    const li = document.createElement('div'); li.className = 'dl-row';
+    const sw = document.createElement('span'); sw.className = 'dl-sw'; sw.style.background = s.color;
+    const nm = document.createElement('span'); nm.className = 'dl-nm'; nm.textContent = s.name;
+    const vl = document.createElement('span'); vl.className = 'dl-vl';
+    vl.textContent = (s.value / total * 100).toFixed(0) + '%';
+    li.append(sw, nm, vl); leg.append(li);
+  }
+  row.append(leg);
 }
 
 function nearest(rows, t) {
@@ -409,17 +497,25 @@ function drawChart(holder, series, opts) {
 
   const gapMs = opts.gapMs || Math.max(3 * 30000, (now - t0) / 120);
   for (const s of series) {
-    let d = '', prev = null;
-    for (const p of s.pts) {
-      d += (prev && p.t - prev.t < gapMs ? 'L' : 'M') + X(p.t).toFixed(1) + ',' + Y(p.v).toFixed(1);
-      prev = p;
+    if (opts.dashes) {
+      // sparse discrete samples: draw each as a fixed-width horizontal dash, no lines between
+      const halfMs = (opts.dashMs || 15 * 60e3) / 2;
+      for (const p of s.pts)
+        el('line', {x1: X(p.t - halfMs), x2: X(p.t + halfMs), y1: Y(p.v), y2: Y(p.v),
+                    stroke: s.color, 'stroke-width': 2.5, 'stroke-linecap': 'round'});
+    } else {
+      let d = '', prev = null;
+      for (const p of s.pts) {
+        d += (prev && p.t - prev.t < gapMs ? 'L' : 'M') + X(p.t).toFixed(1) + ',' + Y(p.v).toFixed(1);
+        prev = p;
+      }
+      if (d) el('path', {d, fill: 'none', stroke: s.color, 'stroke-width': 2,
+                         'stroke-linejoin': 'round', 'stroke-linecap': 'round'});
+      if (opts.markers) for (const p of s.pts)
+        el('circle', {cx: X(p.t), cy: Y(p.v), r: 4, fill: s.color, stroke: css('--surface-1'), 'stroke-width': 2});
+      const last = s.pts[s.pts.length - 1];
+      if (last) el('circle', {cx: X(last.t), cy: Y(last.v), r: 4, fill: s.color, stroke: css('--surface-1'), 'stroke-width': 2});
     }
-    if (d) el('path', {d, fill: 'none', stroke: s.color, 'stroke-width': 2,
-                       'stroke-linejoin': 'round', 'stroke-linecap': 'round'});
-    if (opts.markers) for (const p of s.pts)
-      el('circle', {cx: X(p.t), cy: Y(p.v), r: 4, fill: s.color, stroke: css('--surface-1'), 'stroke-width': 2});
-    const last = s.pts[s.pts.length - 1];
-    if (last) el('circle', {cx: X(last.t), cy: Y(last.v), r: 4, fill: s.color, stroke: css('--surface-1'), 'stroke-width': 2});
     for (const f of s.fails)
       el('line', {x1: X(f.t), x2: X(f.t), y1: M.t, y2: M.t + 7, stroke: css('--st-crit'), 'stroke-width': 2});
   }
