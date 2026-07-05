@@ -511,11 +511,20 @@ def collector_loop(conn_path, lock, interval, speed_interval, stop):
     last_prune = 0.0
     last_router = 0.0
     last_aranet = 0.0
+    last_cycle = 0.0
     router_interval = (CONFIG.get("router") or {}).get("interval", 300)
     aranet_interval = (CONFIG.get("aranet") or {}).get("interval", 60)
     aranet_backfill(conn)
     while not stop.is_set():
         t0 = time.time()
+        # A cycle arriving far later than scheduled means the host was frozen
+        # (macOS sleep). launchd resumes the same process rather than restarting
+        # it, so the startup backfill above never re-runs — this is our only
+        # chance to close the gap. aranet_backfill is idempotent (dedups by
+        # minute), so re-running it just pulls in whatever we missed.
+        if last_cycle and t0 - last_cycle > max(3 * interval, 180):
+            aranet_backfill(conn)
+        last_cycle = t0
         try:
             with lock:
                 run_cycle(conn)
