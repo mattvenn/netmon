@@ -8,8 +8,9 @@ every 30 seconds into SQLite; a dashboard shows a plain-language verdict and
 history charts.
 
 Runs the same on macOS and on a Raspberry Pi. Core monitoring is Python
-stdlib; the one dependency (`qrcode`, for the dashboard's scan-to-open QR)
-lives in a project venv that `install-mac.sh` sets up.
+stdlib; the dependencies (`qrcode` for the dashboard's scan-to-open QR, and the
+optional `aranet4` for the CO2/temp/humidity card) live in a project venv that
+`install-mac.sh` sets up.
 
 ## Quick start
 
@@ -51,7 +52,8 @@ Machine-specific targets go in a `config.json` next to `netmon.py` (gitignored,
 {
   "source": "Mac",
   "lan_targets": { "extender": "192.168.2.184" },
-  "router": { "host": "192.168.2.1", "user": "admin", "pass": "…", "interval": 300 }
+  "router": { "host": "192.168.2.1", "user": "admin", "pass": "…", "interval": 300 },
+  "aranet": { "mac": "…", "interval": 60, "backfill": true }
 }
 ```
 
@@ -66,6 +68,27 @@ is archived to `logs/router-syslog.log` before it rotates away, with notable
 lines (WAN link drops, deauths, DHCP trouble) surfaced in the dashboard events
 table. Note: the probe's API login can occasionally sign out a browser session
 on the router's admin UI.
+
+### Aranet4 air-quality card (optional)
+
+With an `aranet` block, netmon reads a nearby [Aranet4](https://aranet.com/) CO2
+monitor over Bluetooth LE every `interval` seconds and adds two cards to the
+dashboard: temperature + humidity (dual-axis), and CO2 in ppm (with 800/1400 ppm
+comfort reference lines). Not a network measurement — it lives in `aranet.py`,
+separate from the stdlib-only network probes.
+
+Find the device's Bluetooth address and drop it into `aranet.mac`:
+
+```bash
+python aranet.py scan          # lists nearby Aranet4s and their address
+python aranet.py read          # one-off current reading (uses config.json)
+```
+
+On macOS the address is a CoreBluetooth UUID (not a hardware MAC) and the first
+BLE access triggers a Bluetooth permission prompt for the terminal/Python. The
+collector needs to be within Bluetooth range of the sensor. On first run (unless
+`"backfill": false`) netmon pulls the Aranet's on-device log to backfill history,
+and does the same to close gaps after a restart.
 
 ## Reading the verdict
 
@@ -104,6 +127,7 @@ stats (present on Raspberry Pi OS).
 
 - `netmon.py` — CLI: `probe` / `speedtest` / `run`; diagnosis rules live here
 - `probes.py` — the measurements (ping, raw DNS, HTTP, WiFi info, speed)
+- `aranet.py` — optional Aranet4 environment probe (BLE); CLI: `scan` / `read` / `history`
 - `db.py` — SQLite schema and queries
 - `server.py` — JSON API + serves the two pages
 - `dashboard.html`, `phone.html` — self-contained UI, no external assets

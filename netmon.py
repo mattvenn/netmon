@@ -214,6 +214,56 @@ def _append_router_log(lines):
     return new
 
 
+def run_aranet_probe(conn, source=SOURCE):
+    """Read the Aranet4 (temp / humidity / CO2) over BLE and record one sample.
+    Gated on config.json "aranet"; non-network, so it runs outside the cycle lock."""
+    cfg = CONFIG.get("aranet")
+    if not cfg or not cfg.get("mac"):
+        return None
+    import aranet
+    r = aranet.read(cfg.get("mac"))
+    name = r.get("name") or "aranet"
+    if not r.get("ok"):
+        db.insert(conn, source, "aranet", name, False, None, {"error": r.get("error")})
+        return False
+    # value = CO2 ppm (the headline number); the rest rides along in detail.
+    detail = {k: r[k] for k in ("temp_c", "humidity", "pressure", "battery")
+              if r.get(k) is not None}
+    db.insert(conn, source, "aranet", name, True, r.get("co2"), detail)
+    return True
+
+
+def aranet_backfill(conn, source=SOURCE):
+    """One-shot: pull the Aranet4's whole on-device log and insert any readings we
+    don't already have. Fills the charts on first run and closes gaps after a
+    restart. Dedups by minute against stored samples — so it's idempotent and,
+    crucially, still recovers old history even if a live poll already landed a row
+    (a max-timestamp gate would skip everything before that first poll).
+    Best-effort — a BLE failure here must not stop the collector."""
+    cfg = CONFIG.get("aranet")
+    if not cfg or not cfg.get("mac") or not cfg.get("backfill", True):
+        return
+    import aranet
+    have = {round(ts / 60) for (ts,) in conn.execute(
+        "SELECT ts FROM samples WHERE probe='aranet' AND source=? AND ok=1", (source,))}
+    try:
+        recs = aranet.history(cfg.get("mac"))  # full log; the device keeps ~a week
+    except Exception as e:
+        print(f"[aranet] backfill skipped: {e!r}", flush=True)
+        return
+    n = 0
+    for rec in recs:
+        if round(rec["ts"] / 60) in have:
+            continue  # already stored (from an earlier backfill or a live poll)
+        detail = {k: rec[k] for k in ("temp_c", "humidity", "pressure")
+                  if rec.get(k) is not None}
+        db.insert(conn, source, "aranet", cfg.get("name") or "aranet", True,
+                  rec.get("co2"), detail, ts=rec["ts"])
+        n += 1
+    if n:
+        print(f"[aranet] backfilled {n} stored readings", flush=True)
+
+
 def _router_netdev():
     """Best-effort per-interface counters from the router; None if unavailable."""
     if not CONFIG.get("router"):
@@ -460,7 +510,10 @@ def collector_loop(conn_path, lock, interval, speed_interval, stop):
     last_speed = 0.0
     last_prune = 0.0
     last_router = 0.0
+    last_aranet = 0.0
     router_interval = (CONFIG.get("router") or {}).get("interval", 300)
+    aranet_interval = (CONFIG.get("aranet") or {}).get("interval", 60)
+    aranet_backfill(conn)
     while not stop.is_set():
         t0 = time.time()
         try:
@@ -469,6 +522,9 @@ def collector_loop(conn_path, lock, interval, speed_interval, stop):
             if CONFIG.get("router") and time.time() - last_router >= router_interval:
                 run_router_probe(conn)
                 last_router = time.time()
+            if CONFIG.get("aranet") and time.time() - last_aranet >= aranet_interval:
+                run_aranet_probe(conn)
+                last_aranet = time.time()
             if speed_interval and time.time() - last_speed >= speed_interval:
                 with lock:
                     run_speedtest(conn)

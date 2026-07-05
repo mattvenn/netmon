@@ -1,1 +1,3 @@
 qrcode>=8
+aranet4>=2.6  # optional: Aranet4 CO2/temp/humidity probe (BLE)
+bleak<3       # aranet4 leaves bleak uncapped; the 3.0 rewrite is unvalidated here

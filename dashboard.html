@@ -11,6 +11,7 @@
   --grid: #e1e0d9; --baseline: #c3c2b7; --border: rgba(11,11,11,0.10);
   --c-router: #2a78d6; --c-cf: #1baf7a; --c-goog: #eda100;
   --c-sys: #e87ba4; --c-down: #008300; --c-up: #eb6834; --c-rssi: #4a3aa7; --c-isp: #eb6834;
+  --c-temp: #d84c2f; --c-humid: #2a78d6; --c-co2: #7a52c9;
   --st-good: #0ca30c; --st-warn: #fab219; --st-serious: #ec835a; --st-crit: #d03b3b;
   --cat-1:#2a78d6; --cat-2:#1baf7a; --cat-3:#eda100; --cat-4:#008300;
   --cat-5:#4a3aa7; --cat-6:#e34948; --cat-7:#e87ba4; --cat-8:#898781;
@@ -22,6 +23,7 @@
     --grid: #2c2c2a; --baseline: #383835; --border: rgba(255,255,255,0.10);
     --c-router: #3987e5; --c-cf: #199e70; --c-goog: #c98500;
     --c-sys: #d55181; --c-down: #008300; --c-up: #d95926; --c-rssi: #9085e9; --c-isp: #d95926;
+    --c-temp: #e5674b; --c-humid: #3987e5; --c-co2: #9a7ce0;
     --cat-1:#3987e5; --cat-2:#199e70; --cat-3:#c98500; --cat-4:#008300;
     --cat-5:#9085e9; --cat-6:#e66767; --cat-7:#d55181; --cat-8:#898781;
   }
@@ -70,6 +72,9 @@ button.act:disabled { color: var(--ink-muted); cursor: wait; }
 .dot.ok { background: var(--st-good); } .dot.warn { background: var(--st-warn); }
 .dot.bad { background: var(--st-crit); } .dot.unknown { background: var(--ink-muted); }
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; }
+.section-sep { display: flex; align-items: center; gap: 14px; margin: 26px 2px 14px; }
+.section-sep::before, .section-sep::after { content: ""; height: 1px; background: var(--border); flex: 1; }
+.section-sep span { color: var(--ink-2); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; }
 .card {
   background: var(--surface-1); border: 1px solid var(--border);
   border-radius: 10px; padding: 12px 12px 6px; position: relative;
@@ -138,6 +143,10 @@ footer { color: var(--ink-muted); font-size: 12px; margin: 18px 0 8px; }
   </div>
   <div class="tiles" id="tiles"></div>
   <div class="grid2" id="charts"></div>
+  <div id="env-section" style="display:none">
+    <div class="section-sep"><span>Environment</span></div>
+    <div class="grid2" id="charts-env"></div>
+  </div>
   <details id="events-box"><summary>Recent failures &amp; events</summary><div id="events"></div></details>
   <footer>netmon · phone test page at <a href="/phone" style="color:inherit">/phone</a></footer>
 </div>
@@ -148,7 +157,8 @@ const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).
 const COLORS = () => ({
   router: css('--c-router'), cf: css('--c-cf'), goog: css('--c-goog'),
   sys: css('--c-sys'), down: css('--c-down'), up: css('--c-up'),
-  rssi: css('--c-rssi'), isp: css('--c-isp'), muted: css('--ink-muted')
+  rssi: css('--c-rssi'), isp: css('--c-isp'), muted: css('--ink-muted'),
+  temp: css('--c-temp'), humid: css('--c-humid'), co2: css('--c-co2')
 });
 
 let rangeH = 6, source = null, history = [], baseline = [], status = null;
@@ -304,6 +314,9 @@ function renderCharts() {
   const C = COLORS();
   const box = $('charts');
   box.textContent = '';
+  const envBox = $('charts-env');
+  envBox.textContent = '';
+  $('env-section').style.display = 'none';
   drawQueue = [];
   if (!source) return;
   const loss = r => (r.detail && r.detail.loss_pct != null) ? r.detail.loss_pct : (r.ok ? 0 : 100);
@@ -365,6 +378,26 @@ function renderCharts() {
   const ctStart = baseline.find(r => r.source === source) || ctRows[0];
   if (ctEnd && ctEnd.detail && ctEnd.detail.clients && ctStart && ctStart !== ctEnd) {
     deviceDonut(box, ctDelta(ctStart, ctEnd), 'last ' + rangeLabel());
+  }
+
+  // Environment section (Aranet4 sensor) — a separate group below a divider,
+  // only shown when the sensor is reporting. Temperature, humidity and CO2 each
+  // get their own card.
+  const air = pick('aranet');
+  if (air.length) {
+    $('env-section').style.display = '';
+    chartCard(envBox, 'Temperature', '°C', [
+      {name: 'temperature', color: C.temp, ...seriesOf(air, r => r.detail && r.detail.temp_c)}
+    ], {fmt: v => v.toFixed(1) + ' °C', gapMs: 22 * 60e3});  // break line on sensor dropout, not normal logging gaps
+
+    chartCard(envBox, 'Humidity', '%RH', [
+      {name: 'humidity', color: C.humid, ...seriesOf(air, r => r.detail && r.detail.humidity)}
+    ], {fmt: v => v.toFixed(0) + ' %', gapMs: 22 * 60e3});
+
+    chartCard(envBox, 'CO₂', 'ppm', [
+      {name: 'CO₂', color: C.co2, ...seriesOf(air)}
+    ], {fmt: v => Math.round(v) + ' ppm', zero: true, gapMs: 22 * 60e3,
+        refLines: [{v: 800, label: '800'}, {v: 1400, label: '1400'}]});
   }
 
   // draw after every card is in the grid, so each holder has its final width
@@ -524,30 +557,44 @@ function underLoadCaption(card) {
 }
 
 function drawChart(holder, series, opts) {
+  // A series may set axis:'right' to plot against a second Y-axis (its own scale,
+  // configured by opts.right) — e.g. humidity %RH beside temperature °C.
+  const rightSeries = series.filter(s => s.axis === 'right');
+  const leftSeries = series.filter(s => s.axis !== 'right');
+  const hasRight = rightSeries.length > 0;
   const W = Math.max(300, holder.clientWidth || 480), H = 190;
-  const M = {l: 44, r: 12, t: 8, b: 22};
+  const M = {l: 44, r: hasRight ? 40 : 12, t: 8, b: 22};
   const iw = W - M.l - M.r, ih = H - M.t - M.b;
   const now = Date.now(), t0 = now - rangeH * 3600 * 1000;
   const X = t => M.l + (t - t0) / (now - t0) * iw;
 
-  let vmin = Infinity, vmax = -Infinity, allv = [];
-  for (const s of series) for (const p of s.pts) {
-    if (p.v < vmin) vmin = p.v; if (p.v > vmax) vmax = p.v; allv.push(p.v);
+  // Build a Y-scale (min/max/ticks + mappers) for a subset of series. `o` supplies
+  // the axis options (zero/clip/clipMax/max); out-of-range points get clamped by Yc.
+  function scaleFor(subset, o) {
+    let vmin = Infinity, vmax = -Infinity, allv = [];
+    for (const s of subset) for (const p of s.pts) {
+      if (p.v < vmin) vmin = p.v; if (p.v > vmax) vmax = p.v; allv.push(p.v);
+    }
+    if (!isFinite(vmin)) { vmin = 0; vmax = 1; }
+    if (o.zero) vmin = Math.min(0, vmin);
+    // clip so one huge spike doesn't flatten everything; out-of-range points poke
+    // out at the top edge. clipMax = fixed ceiling; clip = percentile.
+    if (o.clipMax != null) {
+      vmax = o.clipMax;
+    } else if (o.clip && allv.length > 4) {
+      allv.sort((a, b) => a - b);
+      vmax = Math.max(vmin + 1, allv[Math.floor(o.clip * (allv.length - 1))]);
+    }
+    if (o.max != null) vmax = Math.max(vmax, 1); else if (vmax === vmin) vmax = vmin + 1;
+    const [ymin, ymax, ticks] = niceScale(vmin, vmax, o.max);
+    const Y = v => M.t + ih - (v - ymin) / (ymax - ymin) * ih;
+    const Yc = v => Math.max(M.t, Math.min(H - M.b, Y(v)));
+    return {ymin, ymax, ticks, Y, Yc};
   }
-  if (!isFinite(vmin)) { vmin = 0; vmax = 1; }
-  if (opts.zero) vmin = Math.min(0, vmin);
-  // clip the axis so one huge spike doesn't flatten everything; out-of-range points
-  // are drawn hitting the top edge (they "poke out"). clipMax = fixed ceiling; clip = percentile.
-  if (opts.clipMax != null) {
-    vmax = opts.clipMax;
-  } else if (opts.clip && allv.length > 4) {
-    allv.sort((a, b) => a - b);
-    vmax = Math.max(vmin + 1, allv[Math.floor(opts.clip * (allv.length - 1))]);
-  }
-  if (opts.max != null) vmax = Math.max(vmax, 1); else if (vmax === vmin) vmax = vmin + 1;
-  const [ymin, ymax, ticks] = niceScale(vmin, vmax, opts.max);
-  const Y = v => M.t + ih - (v - ymin) / (ymax - ymin) * ih;
-  const Yc = v => Math.max(M.t, Math.min(H - M.b, Y(v)));  // clamped into the plot area
+  const leftScale = scaleFor(leftSeries.length ? leftSeries : series, opts);
+  const rightScale = hasRight ? scaleFor(rightSeries, opts.right || {}) : null;
+  const scaleOf = s => (s.axis === 'right' && rightScale) ? rightScale : leftScale;
+  const {ymin, ymax, ticks, Y, Yc} = leftScale;  // gridlines + reference lines follow the left axis
 
   const NS = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(NS, 'svg');
@@ -560,11 +607,32 @@ function drawChart(holder, series, opts) {
     (parent2 || svg).append(e); return e;
   };
 
-  // gridlines + y labels
+  // gridlines + left y labels (tinted to the series colour when a right axis shares the plot)
+  const fmtTick = tv => Math.abs(tv) >= 1000 ? (tv / 1000) + 'k' : tv;
+  const leftLabelFill = hasRight && leftSeries.length ? leftSeries[0].color : css('--ink-muted');
   for (const tv of ticks) {
     el('line', {x1: M.l, x2: W - M.r, y1: Y(tv), y2: Y(tv), stroke: css('--grid'), 'stroke-width': 1});
-    const tx = el('text', {x: M.l - 6, y: Y(tv) + 3.5, 'text-anchor': 'end', 'font-size': 10, fill: css('--ink-muted')});
-    tx.textContent = Math.abs(tv) >= 1000 ? (tv/1000) + 'k' : tv;
+    const tx = el('text', {x: M.l - 6, y: Y(tv) + 3.5, 'text-anchor': 'end', 'font-size': 10, fill: leftLabelFill});
+    tx.textContent = fmtTick(tv);
+  }
+  // right y labels (no gridlines — they'd collide with the left set)
+  if (rightScale) {
+    for (const tv of rightScale.ticks) {
+      const tx = el('text', {x: W - M.r + 6, y: rightScale.Y(tv) + 3.5, 'text-anchor': 'start',
+                             'font-size': 10, fill: rightSeries[0].color});
+      tx.textContent = fmtTick(tv);
+    }
+  }
+  // reference lines (e.g. CO2 comfort thresholds): dashed rule + a small label
+  for (const rl of (opts.refLines || [])) {
+    if (rl.v < ymin || rl.v > ymax) continue;
+    el('line', {x1: M.l, x2: W - M.r, y1: Y(rl.v), y2: Y(rl.v), stroke: css('--baseline'),
+                'stroke-width': 1, 'stroke-dasharray': '3,3', opacity: 0.8});
+    if (rl.label) {
+      const tx = el('text', {x: W - M.r - 2, y: Y(rl.v) - 2.5, 'text-anchor': 'end',
+                             'font-size': 9, fill: css('--ink-muted')});
+      tx.textContent = rl.label;
+    }
   }
   // x ticks
   for (const [t, lbl] of timeTicks(t0, now)) {
@@ -576,6 +644,7 @@ function drawChart(holder, series, opts) {
 
   const gapMs = opts.gapMs || Math.max(3 * 30000, (now - t0) / 120);
   for (const s of series) {
+    const {Y, Yc} = scaleOf(s);  // this series' axis (left by default, right if axis:'right')
     if (opts.dashes) {
       // sparse discrete samples: a dash per sample, no lines between. Width caps at
       // 15 min but shrinks to the midpoints of neighbours so clustered tests don't overlap.
@@ -653,7 +722,7 @@ function drawChart(holder, series, opts) {
       const key = document.createElement('i'); key.style.borderTopColor = s.color;
       const n = document.createElement('span'); n.className = 'n'; n.textContent = s.name;
       const v = document.createElement('span'); v.className = 'v';
-      v.textContent = (best && d2 < 90000) ? opts.fmt(best.v) : '—';
+      v.textContent = (best && d2 < 90000) ? (s.fmt || opts.fmt)(best.v) : '—';
       row.append(key, n, v); tt.append(row);
     }
     if (opts.extraTip) {
