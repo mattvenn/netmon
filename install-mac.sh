@@ -45,8 +45,17 @@ cat > "$PLIST" <<EOF
 </plist>
 EOF
 
-launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-launchctl bootstrap "gui/$(id -u)" "$PLIST"
+DOMAIN="gui/$(id -u)"
+# bootout is asynchronous: it returns before the old instance is fully unloaded.
+# Bootstrapping straight away races it and fails with "Input/output error" (which
+# looks like a permissions problem but isn't — this is a per-user agent, never sudo).
+# Wait for the label to actually disappear before re-bootstrapping.
+launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+for _ in $(seq 1 25); do
+  launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1 || break
+  sleep 0.2
+done
+launchctl bootstrap "$DOMAIN" "$PLIST"
 sleep 2
 IP=$(ipconfig getifaddr en0 2>/dev/null || echo "<mac-ip>")
 echo "netmon running."
