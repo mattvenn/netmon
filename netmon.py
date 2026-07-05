@@ -24,6 +24,12 @@ DEFAULT_PORT = 8737
 DEFAULT_INTERVAL = 30
 DEFAULT_SPEED_INTERVAL = 15 * 60
 
+# During a speed test, ping each hop concurrently to catch latency-under-load
+# (bufferbloat) and localize a throughput drop to a hop. ~3s of pings at 0.2s
+# spacing overlaps the download, which is when a queue builds.
+UNDER_LOAD_PING_COUNT = 15
+UNDER_LOAD_BLOAT_MS = 150  # under-load latency above this (with the router flat) = a real bottleneck
+
 def load_config():
     """Optional machine-specific config.json next to this file.
     Keys: lan_targets — {name: ip} of LAN devices to ping each cycle (e.g. an extender)."""
@@ -228,12 +234,41 @@ def _counter_delta(before, after):
     return d if d >= 0 else d + (1 << 32)
 
 
+def _start_under_load_pings(conn):
+    """Ping gateway / hop2 / a WAN host *concurrently with the speed test*, so a
+    throughput drop can be localized. If latency to hop2 or 8.8.8.8 balloons
+    under load while the gateway stays flat, the bottleneck is the in-between box
+    or the ISP path — not your WiFi/router. Returns (threads, results); the
+    caller joins the threads after the transfer finishes."""
+    targets = {}
+    gw = probes.get_default_gateway()
+    if gw:
+        targets["gateway"] = gw
+    h2 = _hop2_ip(conn)
+    if h2:
+        targets["hop2"] = h2
+    targets["wan"] = "8.8.8.8"
+
+    results, threads = {}, []
+    def worker(name, host):
+        results[name] = probes.ping(host, count=UNDER_LOAD_PING_COUNT)
+    for name, host in targets.items():
+        t = threading.Thread(target=worker, args=(name, host), daemon=True)
+        t.start()
+        threads.append(t)
+    return threads, results
+
+
 def run_speedtest(conn, source=SOURCE):
     nd0 = _router_netdev()
     t0 = time.monotonic()
+    ul_threads, ul_results = _start_under_load_pings(conn)
     down = probes.speed_download()
     up = probes.speed_upload()
     window = time.monotonic() - t0
+    for t in ul_threads:
+        t.join(timeout=probes.SPEED_TIME_CAP)
+    under_load = {k: v for k, v in ul_results.items() if v and v.get("ok")}
 
     contention = None
     nd1 = _router_netdev() if nd0 else None
@@ -255,9 +290,26 @@ def run_speedtest(conn, source=SOURCE):
                       {"line": f"speed test saw {contention['other_down_mb']:.0f} MB of other "
                                f"downstream traffic (busiest segment: {SEG_NAMES.get(busiest, busiest)})"})
 
+    # Localize a throughput bottleneck: if latency balloons under load on the ISP
+    # side while your own router stays flat, it's the in-between box or the ISP —
+    # hop2 elevated => at/before the box; only the WAN host elevated => beyond it.
+    gwm = (under_load.get("gateway") or {}).get("max_ms") or 0.0
+    isp_side = [(hop, (under_load.get(hop) or {}).get("max_ms"))
+                for hop in ("hop2", "wan")]
+    worst = max(((v, hop) for hop, v in isp_side if v is not None), default=(0.0, None))
+    if worst[0] > UNDER_LOAD_BLOAT_MS and worst[0] > gwm * 3:
+        h2m = (under_load.get("hop2") or {}).get("max_ms")
+        where = ("in-between box or its link" if h2m and h2m > UNDER_LOAD_BLOAT_MS
+                 else "ISP path (beyond the in-between box)")
+        db.insert(conn, source, "router_event", "bufferbloat", False, None,
+                  {"line": f"under-load latency ballooned to {worst[0]:.0f} ms while your "
+                           f"router stayed {gwm:.0f} ms — bottleneck looks like the {where}"})
+
     down_detail = dict(down)
     if contention:
         down_detail["contention"] = contention
+    if under_load:
+        down_detail["under_load"] = under_load
     db.insert(conn, source, "speed_down", "cloudflare", down.get("ok", False),
               down.get("mbps"), down_detail)
     db.insert(conn, source, "speed_up", "cloudflare", up.get("ok", False),

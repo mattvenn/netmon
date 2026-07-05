@@ -50,6 +50,29 @@ def history(conn, since_ts, probes=None):
     return rows
 
 
+def client_traffic_baseline(conn, before_ts):
+    """Latest client_traffic snapshot per source strictly before before_ts.
+
+    client_traffic values are cumulative router counters, so the dashboard
+    needs the snapshot just before a window to diff against and show
+    per-device usage *during* the selected period rather than lifetime totals.
+    """
+    rows = []
+    sources = [r[0] for r in conn.execute(
+        "SELECT DISTINCT source FROM samples WHERE probe = 'client_traffic'")]
+    for source in sources:
+        row = conn.execute(
+            """SELECT ts, detail FROM samples
+               WHERE probe = 'client_traffic' AND source = ? AND ts < ?
+               ORDER BY ts DESC LIMIT 1""", (source, before_ts)).fetchone()
+        if row:
+            ts, detail = row
+            rows.append({"ts": ts, "source": source, "probe": "client_traffic",
+                         "target": "", "ok": True, "value": None,
+                         "detail": json.loads(detail) if detail else None})
+    return rows
+
+
 def latest(conn, window_s=180):
     """Most recent sample per (source, probe, target) within the window."""
     since = time.time() - window_s

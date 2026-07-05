@@ -81,6 +81,11 @@ button.act:disabled { color: var(--ink-muted); cursor: wait; }
 .chart { width: 100%; display: block; }
 .donut-row { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; padding-bottom: 6px; }
 .donut-legend { flex: 1; min-width: 130px; display: flex; flex-direction: column; gap: 3px; }
+.donut-note { font-size: 12px; color: var(--ink-muted); line-height: 1.4; padding: 4px 0 6px; }
+.ul-cap { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 6px; font-size: 11px; color: var(--ink-2); }
+.ul-lab { color: var(--ink-muted); }
+.ul-hop { display: inline-flex; align-items: center; gap: 5px; }
+.ul-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .dl-row { display: flex; align-items: center; gap: 6px; font-size: 11px; }
 .dl-sw { width: 10px; height: 10px; border-radius: 2px; flex: none; }
 .dl-nm { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
@@ -146,7 +151,7 @@ const COLORS = () => ({
   rssi: css('--c-rssi'), isp: css('--c-isp'), muted: css('--ink-muted')
 });
 
-let rangeH = 6, source = null, history = [], status = null;
+let rangeH = 6, source = null, history = [], baseline = [], status = null;
 let refetchTimer = null;
 
 const $ = id => document.getElementById(id);
@@ -173,6 +178,7 @@ async function fetchHistory() {
   try {
     const r = await (await fetch('/api/history?hours=' + rangeH)).json();
     history = r.rows;
+    baseline = r.baseline || [];
     renderSources();
     renderCharts();
     renderEvents();
@@ -334,10 +340,11 @@ function renderCharts() {
       return r && r.detail ? (r.detail.band || '') + ' ch' + (r.detail.channel ?? '?') + ' · link ' + (r.detail.rate_mbps ?? '?') + ' Mbps' : '';
   }});
 
-  chartCard(box, 'Bandwidth', 'Mbps', [
+  const bwCard = chartCard(box, 'Bandwidth', 'Mbps', [
     {name: 'download', color: C.down, ...seriesOf(pick('speed_down'))},
     {name: 'upload', color: C.up, ...seriesOf(pick('speed_up'))}
   ], {fmt: fmt.mbps, zero: true, markers: true, gapMs: 25 * 60e3}); // join 15-min tests; break on sleep gaps
+  underLoadCaption(bwCard);
 
   const lanTargets = [...new Set(pick('lan_ping').map(r => r.target))].sort();
   if (lanTargets.length) {
@@ -348,32 +355,66 @@ function renderCharts() {
     })), {fmt: fmt.ms, zero: true});
   }
 
+  // Per-device usage *during* the selected period: diff the last snapshot in
+  // the window against a start snapshot. Prefer the baseline captured just
+  // before the window (router totals refresh only every ~30-90 min, so short
+  // windows often have <2 in-window snapshots); fall back to the first
+  // in-window snapshot if there's no earlier data.
   const ctRows = history.filter(r => r.probe === 'client_traffic' && r.source === source);
-  const ctLast = ctRows[ctRows.length - 1];
-  if (ctLast && ctLast.detail && ctLast.detail.clients) deviceDonut(box, ctLast.detail.clients);
+  const ctEnd = ctRows[ctRows.length - 1];
+  const ctStart = baseline.find(r => r.source === source) || ctRows[0];
+  if (ctEnd && ctEnd.detail && ctEnd.detail.clients && ctStart && ctStart !== ctEnd) {
+    deviceDonut(box, ctDelta(ctStart, ctEnd), 'last ' + rangeLabel());
+  }
 
   // draw after every card is in the grid, so each holder has its final width
   for (const job of drawQueue) drawChart(...job);
   drawQueue = [];
 }
 
-function deviceDonut(parent, clients) {
+// Label of the currently selected range button (e.g. "6h", "15m").
+function rangeLabel() {
+  const on = [...$('range-seg').children].find(x => x.classList.contains('on'));
+  return on ? on.textContent.trim() : rangeH + 'h';
+}
+
+// Per-device down/up MB used between two cumulative snapshots. A negative delta
+// means the router counter reset in the window, so fall back to the end value.
+function ctDelta(startSnap, endSnap) {
+  const start = {};
+  (startSnap.detail.clients || []).forEach(c => { start[c.mac] = c; });
+  return (endSnap.detail.clients || []).map(c => {
+    const s = start[c.mac];
+    let dd = c.down_mb - (s ? s.down_mb : 0);
+    let du = c.up_mb - (s ? s.up_mb : 0);
+    if (dd < 0) dd = c.down_mb;
+    if (du < 0) du = c.up_mb;
+    return {name: c.name, mac: c.mac, ip: c.ip, down_mb: dd, up_mb: du};
+  });
+}
+
+function deviceDonut(parent, clients, label) {
   const cats = [1,2,3,4,5,6,7].map(i => css('--cat-' + i));
   let items = clients.map(c => ({
     name: (c.name || c.mac || '?') + (c.ip ? ' ·' + c.ip.split('.').pop() : ''),
     value: (c.down_mb || 0) + (c.up_mb || 0)
   })).filter(x => x.value > 0.05).sort((a, b) => b.value - a.value);
-  if (!items.length) return;
+
+  const card = document.createElement('div'); card.className = 'card';
+  const h = document.createElement('h2'); h.textContent = 'Bandwidth by device · ' + (label || 'recent'); card.append(h);
+  parent.append(card);
+  if (!items.length) {
+    const note = document.createElement('div'); note.className = 'donut-note';
+    note.textContent = 'No per-device traffic recorded in this period — the router reports totals only every ~30–90 min, so try a wider range.';
+    card.append(note);
+    return;
+  }
   const top = items.slice(0, 7);
   const rest = items.slice(7);
   if (rest.length) top.push({name: 'Other (' + rest.length + ')', value: rest.reduce((s, x) => s + x.value, 0)});
   top.forEach((s, i) => s.color = i < 7 ? cats[i] : css('--cat-8'));
   const total = top.reduce((s, x) => s + x.value, 0) || 1;
-
-  const card = document.createElement('div'); card.className = 'card';
-  const h = document.createElement('h2'); h.textContent = 'Bandwidth by device (last 24h)'; card.append(h);
   const row = document.createElement('div'); row.className = 'donut-row'; card.append(row);
-  parent.append(card);
 
   const NS = 'http://www.w3.org/2000/svg';
   const size = 168, cx = size / 2, cy = size / 2, rO = 72, rI = 44;
@@ -453,6 +494,33 @@ function chartCard(parent, title, unit, series, opts) {
   card.append(holder);
   parent.append(card);
   drawQueue.push([holder, series, opts]);
+  return card;
+}
+
+// Compact per-hop "latency under load" readout beneath the Bandwidth chart. Uses
+// the pings taken *during* the last speed test so a throughput drop points at the
+// culprit hop: your router (local WiFi/LAN) vs the in-between box vs the ISP path.
+function underLoadCaption(card) {
+  const rows = pick('speed_down').filter(r => r.detail && r.detail.under_load);
+  const last = rows[rows.length - 1];
+  if (!last) return;
+  const ul = last.detail.under_load;
+  const cap = document.createElement('div'); cap.className = 'ul-cap';
+  const lab = document.createElement('span'); lab.className = 'ul-lab'; lab.textContent = 'Latency under load';
+  cap.append(lab);
+  let any = false;
+  for (const [name, key] of [['router', 'gateway'], ['box', 'hop2'], ['internet', 'wan']]) {
+    const h = ul[key];
+    if (!h || h.max_ms == null) continue;
+    any = true;
+    const v = h.max_ms;
+    const col = v > 150 ? '--st-crit' : v > 60 ? '--st-warn' : '--st-good';
+    const hop = document.createElement('span'); hop.className = 'ul-hop';
+    const dot = document.createElement('i'); dot.className = 'ul-dot'; dot.style.background = css(col);
+    const txt = document.createElement('span'); txt.textContent = name + ' ' + Math.round(v) + ' ms';
+    hop.append(dot, txt); cap.append(hop);
+  }
+  if (any) card.append(cap);
 }
 
 function drawChart(holder, series, opts) {

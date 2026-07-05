@@ -94,10 +94,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, res)
         elif url.path == "/api/history":
             hours = float(qs.get("hours", ["6"])[0])
+            since = time.time() - hours * 3600
             conn = db.connect(DB_PATH)
-            rows = db.history(conn, time.time() - hours * 3600)
+            rows = db.history(conn, since)
+            baseline = db.client_traffic_baseline(conn, since)
             conn.close()
-            self._send(200, {"rows": rows})
+            self._send(200, {"rows": rows, "baseline": baseline})
         else:
             self._send(404, {"error": "not found"})
 
