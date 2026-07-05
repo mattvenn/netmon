@@ -54,8 +54,13 @@ def get_hop2(timeout_s=8):
     return None
 
 
-def ping(host, count=5, timeout_s=2):
-    """Returns {ok, loss_pct, min_ms, avg_ms, max_ms}."""
+def ping(host, count=5, timeout_s=5):
+    """Returns {ok, loss_pct, min_ms, avg_ms, max_ms}.
+
+    timeout_s is the per-reply wait (-W). It's generous so genuinely slow replies
+    (congestion / bufferbloat, up to a few seconds) get recorded as high latency
+    rather than miscounted as loss; it's only fully spent on an unreachable host,
+    since a reply that arrives returns immediately."""
     if IS_MAC:
         cmd = ["ping", "-c", str(count), "-i", "0.2", "-W", str(timeout_s * 1000), host]
     else:

@@ -286,11 +286,28 @@ function pick(probe, target) {
   return history.filter(r => r.probe === probe && (target == null || r.target === target)
                           && r.source === source);
 }
-function seriesOf(rows, valueFn) {
+// Sleep-clock artifact filter (opt-in per series via dropSleepArtifacts).
+// A ping/DNS reading can't legitimately exceed the probe's own timeout (a few
+// seconds). When the Mac sleeps mid-probe the wall clock jumps, so the reading
+// resumes inflated to tens of seconds AND lands right after a gap in collection
+// (the sleep itself — the collector runs under launchd KeepAlive, so a multi-
+// minute gap means the machine was asleep/off, not a crash). We drop a point
+// only when BOTH hold: it sits at such a gap and it's far above any possible
+// real round-trip. A merely-long ping during normal operation is never touched.
+const SLEEP_GAP_S = 60;     // no samples for this long ⇒ collector was frozen (asleep/off)
+const ARTIFACT_MS = 8000;   // above the ping timeout: impossible for a real round-trip
+
+function seriesOf(rows, valueFn, dropSleepArtifacts) {
   const pts = [], fails = [];
+  let prevTs = null;
   for (const r of rows) {
+    const gap = prevTs != null ? r.ts - prevTs : 0;
+    prevTs = r.ts;
     const v = valueFn ? valueFn(r) : r.value;
-    if (r.ok && v != null) pts.push({t: r.ts * 1000, v});
+    if (r.ok && v != null) {
+      if (dropSleepArtifacts && gap > SLEEP_GAP_S && v > ARTIFACT_MS) continue;  // frozen clock at a sleep boundary
+      pts.push({t: r.ts * 1000, v});
+    }
     else fails.push({t: r.ts * 1000, err: (r.detail && r.detail.error) || 'failed'});
   }
   return {pts, fails};
@@ -323,10 +340,10 @@ function renderCharts() {
 
   const hop2 = pick('hop2_ping');
   chartCard(box, 'Latency', 'ms', [
-    {name: 'router', color: C.router, ...seriesOf(pick('gateway_ping'))},
-    ...(hop2.length ? [{name: 'ISP box', color: C.isp, ...seriesOf(hop2)}] : []),
-    {name: '1.1.1.1', color: C.cf, ...seriesOf(pick('wan_ping', '1.1.1.1'))},
-    {name: '8.8.8.8', color: C.goog, ...seriesOf(pick('wan_ping', '8.8.8.8'))}
+    {name: 'router', color: C.router, ...seriesOf(pick('gateway_ping'), null, true)},
+    ...(hop2.length ? [{name: 'ISP box', color: C.isp, ...seriesOf(hop2, null, true)}] : []),
+    {name: '1.1.1.1', color: C.cf, ...seriesOf(pick('wan_ping', '1.1.1.1'), null, true)},
+    {name: '8.8.8.8', color: C.goog, ...seriesOf(pick('wan_ping', '8.8.8.8'), null, true)}
   ], {fmt: fmt.ms, zero: true, clipMax: 100});
 
   chartCard(box, 'Packet loss', '%', [
@@ -338,9 +355,9 @@ function renderCharts() {
   ], {fmt: fmt.pct, zero: true, max: 100});
 
   chartCard(box, 'DNS lookup time', 'ms', [
-    {name: 'system', color: C.sys, ...seriesOf(pick('dns', 'system'))},
-    {name: 'via router', color: C.router, ...seriesOf(pick('dns', 'router'))},
-    {name: 'direct 1.1.1.1', color: C.cf, ...seriesOf(pick('dns', 'direct'))}
+    {name: 'system', color: C.sys, ...seriesOf(pick('dns', 'system'), null, true)},
+    {name: 'via router', color: C.router, ...seriesOf(pick('dns', 'router'), null, true)},
+    {name: 'direct 1.1.1.1', color: C.cf, ...seriesOf(pick('dns', 'direct'), null, true)}
   ], {fmt: fmt.ms, zero: true, clipMax: 100});
 
   chartCard(box, 'WiFi signal', 'dBm', [
@@ -364,7 +381,7 @@ function renderCharts() {
     const lanColors = [C.rssi, C.sys, C.goog, C.cf];
     chartCard(box, 'LAN devices', 'ms', lanTargets.map((t, i) => ({
       name: t, color: lanColors[i % lanColors.length],
-      ...seriesOf(pick('lan_ping', t))
+      ...seriesOf(pick('lan_ping', t), null, true)
     })), {fmt: fmt.ms, zero: true});
   }
 
