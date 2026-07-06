@@ -210,6 +210,12 @@ const TILE_DEFS = [
   ['dns_system', 'DNS (system)'], ['dns_router', 'DNS (router)'],
   ['dns_direct', 'DNS (direct)'], ['http', 'Web fetch'], ['speed', 'Speed']
 ];
+function fmtUptime(s) {
+  s = Math.floor(s);
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d ? d + 'd ' + h + 'h' : h ? h + 'h ' + m + 'm' : m + 'm';
+}
+
 function renderStatus() {
   if (!status) return;
   const v = status.verdict || {level: 'unknown', text: 'no data yet'};
@@ -221,6 +227,19 @@ function renderStatus() {
 
   const tiles = $('tiles');
   tiles.textContent = '';
+  if (status.uptime_s != null) {
+    const t = document.createElement('div'); t.className = 'tile';
+    const l = document.createElement('div'); l.className = 'lbl';
+    const dot = document.createElement('span'); dot.className = 'dot ok';
+    l.append(dot, document.createTextNode('Uptime'));
+    const vv = document.createElement('div'); vv.className = 'val'; vv.textContent = fmtUptime(status.uptime_s);
+    t.append(l, vv);
+    if (status.uptime_host) {
+      const s = document.createElement('div'); s.className = 'sub'; s.textContent = status.uptime_host;
+      t.append(s);
+    }
+    tiles.append(t);
+  }
   const defs = [...TILE_DEFS];
   for (const key of Object.keys(status.components || {}).sort())
     if (key.startsWith('lan_')) defs.push([key, key.slice(4)]);
@@ -364,7 +383,8 @@ function renderCharts() {
     {name: 'signal', color: C.rssi, ...seriesOf(pick('wifi'))},
     {name: 'noise', color: C.muted, pts: pick('wifi').filter(r => r.ok && r.detail && r.detail.noise_dbm != null)
         .map(r => ({t: r.ts*1000, v: r.detail.noise_dbm})), fails: []}
-  ], {fmt: fmt.dbm, events: bandChanges(pick('wifi')).map(c => ({t: c.t, label: '→ ' + c.to})),
+  ], {fmt: fmt.dbm, clip: 0.95,  // tame the odd spurious-strong RSSI spike so the real signal isn't squashed; weak dips (the low end) are kept
+      events: bandChanges(pick('wifi')).map(c => ({t: c.t, label: '→ ' + c.to})),
       extraTip: t => {
       const r = nearest(pick('wifi'), t);
       return r && r.detail ? (r.detail.band || '') + ' ch' + (r.detail.channel ?? '?') + ' · link ' + (r.detail.rate_mbps ?? '?') + ' Mbps' : '';

@@ -36,6 +36,27 @@ def lan_ip():
         s.close()
 
 
+def host_uptime_s():
+    """Seconds since this box (the one serving the page) booted — Linux /proc/uptime,
+    else macOS kern.boottime. Read live so it's always current; None if neither works."""
+    try:
+        with open("/proc/uptime") as f:
+            return float(f.read().split()[0])
+    except OSError:
+        pass
+    try:
+        import re
+        import subprocess
+        out = subprocess.run(["sysctl", "-n", "kern.boottime"],
+                             capture_output=True, text=True, timeout=3).stdout
+        m = re.search(r"sec = (\d+)", out)
+        if m:
+            return time.time() - int(m.group(1))
+    except Exception:
+        pass
+    return None
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass  # keep stdout for collector messages
@@ -89,6 +110,8 @@ class Handler(BaseHTTPRequestHandler):
             res["ts"] = time.time()
             res["sources"] = sources
             res["last_speed"] = {s["probe"]: s for s in speed[-4:]}
+            res["uptime_s"] = host_uptime_s()
+            res["uptime_host"] = socket.gethostname().split(".")[0]
             ip = lan_ip()
             res["lan_url"] = f"http://{ip}:{PORT}/" if ip else None
             self._send(200, res)
