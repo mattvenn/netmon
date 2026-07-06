@@ -1,11 +1,22 @@
 # systemd unit for running netmon on a Raspberry Pi (or any Linux box).
+# This is the intended "hub": the always-on box that holds the DB, serves the
+# dashboard, and receives pushed samples from the Mac at /api/ingest.
 #
+#   sudo apt install iw traceroute            # wifi stats + 2nd-hop discovery
 #   cd /home/pi/network-monitor
-#   python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+#   python3 -m venv .venv                      # core needs no pip deps; add
+#   .venv/bin/pip install qrcode               #   qrcode only if you want the QR
+#   cp config.example.json config.json         # then edit: set "source", keep the
+#                                              #   "router" block here (hub owns it)
 #   sudo cp install/netmon.service /etc/systemd/system/
 #   # edit User= and the paths below if your checkout isn't /home/pi/network-monitor
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now netmon
+#
+# View the dashboard at http://<pi-ip>:8737 — the source toggle shows every box
+# that reports in (the Pi's own collector, the Mac via push, the phone).
+# To require a token on ingest, add "ingest_token": "…" to this box's config.json
+# and the matching token to the Mac's "hub" block.
 #
 # Needs: python3 (preinstalled on Raspberry Pi OS) and the `iw` tool for wifi stats.
 

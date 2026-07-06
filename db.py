@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS samples (
 );
 CREATE INDEX IF NOT EXISTS idx_samples_ts ON samples(ts);
 CREATE INDEX IF NOT EXISTS idx_samples_probe_ts ON samples(probe, ts);
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
 
 
@@ -33,6 +34,47 @@ def insert(conn, source, probe, target, ok, value=None, detail=None, ts=None):
         (ts or time.time(), source, probe, target, 1 if ok else 0, value,
          json.dumps(detail) if detail else None))
     conn.commit()
+
+
+def get_meta(conn, key, default=None):
+    row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else default
+
+
+def set_meta(conn, key, value):
+    conn.execute("INSERT INTO meta (key, value) VALUES (?, ?) "
+                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                 (key, str(value)))
+    conn.commit()
+
+
+def rows_since(conn, last_id, limit=2000):
+    """Rows with id > last_id (oldest first), for shipping to a hub. Returns
+    (max_id_seen, [row_dicts]); detail is parsed back to an object so the hub can
+    re-store it the same way a local insert would."""
+    out, max_id = [], last_id
+    for id_, ts, source, probe, target, ok, value, detail in conn.execute(
+            "SELECT id, ts, source, probe, target, ok, value, detail FROM samples "
+            "WHERE id > ? ORDER BY id LIMIT ?", (last_id, limit)):
+        out.append({"ts": ts, "source": source, "probe": probe, "target": target,
+                    "ok": bool(ok), "value": value,
+                    "detail": json.loads(detail) if detail else None})
+        max_id = id_
+    return max_id, out
+
+
+def insert_if_absent(conn, source, probe, target, ok, value, detail, ts):
+    """Idempotent insert keyed on (ts, source, probe, target) — for hub ingest, so a
+    retried push can't duplicate rows. Does not commit; caller commits the batch.
+    Returns True if a row was inserted."""
+    if conn.execute("SELECT 1 FROM samples WHERE ts = ? AND source = ? AND probe = ? "
+                    "AND target = ? LIMIT 1", (ts, source, probe, target)).fetchone():
+        return False
+    conn.execute(
+        "INSERT INTO samples (ts, source, probe, target, ok, value, detail) VALUES (?,?,?,?,?,?,?)",
+        (ts, source, probe, target, 1 if ok else 0, value,
+         json.dumps(detail) if detail else None))
+    return True
 
 
 def history(conn, since_ts, probes=None):

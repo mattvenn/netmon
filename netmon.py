@@ -14,6 +14,7 @@ import re
 import socket
 import threading
 import time
+import urllib.request
 
 import db
 import probes
@@ -505,6 +506,38 @@ def diagnose(latest, source=None):
 RETAIN_DAYS = 90
 
 
+def push_to_hub(conn, budget_s=5):
+    """Ship new local samples to the configured hub (the always-on Pi) so they show up
+    under its dashboard's source toggle. Best-effort: a watermark (max pushed sample id)
+    is only advanced on a 200, so a brief hub outage just defers the rows to the next
+    cycle — nothing is lost, since this box keeps its own DB. Drains any backlog a few
+    batches at a time within budget_s so a first run (or a long outage) catches up
+    without blocking the collector."""
+    hub = CONFIG.get("hub")
+    if not hub or not hub.get("url"):
+        return
+    url = hub["url"].rstrip("/") + "/api/ingest"
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < budget_s:
+        last = int(db.get_meta(conn, "hub_pushed_id", 0) or 0)
+        max_id, rows = db.rows_since(conn, last, limit=2000)
+        if not rows:
+            return
+        payload = json.dumps({"token": hub.get("token"), "rows": rows}).encode()
+        req = urllib.request.Request(url, data=payload,
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                if r.status != 200:
+                    return
+        except Exception as e:
+            print(f"[hub] push deferred ({len(rows)} rows): {type(e).__name__}", flush=True)
+            return
+        db.set_meta(conn, "hub_pushed_id", max_id)
+        if len(rows) < 2000:
+            return  # caught up
+
+
 def collector_loop(conn_path, lock, interval, speed_interval, stop):
     conn = db.connect(conn_path)
     last_speed = 0.0
@@ -543,6 +576,8 @@ def collector_loop(conn_path, lock, interval, speed_interval, stop):
                              (time.time() - RETAIN_DAYS * 24 * 3600,))
                 conn.commit()
                 last_prune = time.time()
+            if CONFIG.get("hub"):
+                push_to_hub(conn)
         except Exception as e:
             print(f"[collector] cycle error: {e!r}", flush=True)
         stop.wait(max(1.0, interval - (time.time() - t0)))

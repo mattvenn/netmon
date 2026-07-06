@@ -134,6 +134,37 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, {"recorded": n})
             except (ValueError, KeyError, TypeError) as e:
                 self._send(400, {"error": str(e)})
+        elif self.path == "/api/ingest":
+            # Hub endpoint: another netmon collector (e.g. the Mac) ships its samples
+            # here so they land in this box's DB and show up under the source toggle.
+            # Idempotent, so a retried push is harmless.
+            try:
+                payload = json.loads(body)
+            except ValueError as e:
+                self._send(400, {"error": str(e)})
+                return
+            token = netmon.CONFIG.get("ingest_token")
+            if token and payload.get("token") != token:
+                self._send(403, {"error": "bad token"})
+                return
+            rows = payload.get("rows")
+            if not isinstance(rows, list):
+                self._send(400, {"error": "rows must be a list"})
+                return
+            conn = db.connect(DB_PATH)
+            n = 0
+            for row in rows[:5000]:
+                try:
+                    if db.insert_if_absent(
+                            conn, str(row["source"])[:64], str(row["probe"])[:64],
+                            str(row.get("target", ""))[:64], bool(row.get("ok")),
+                            row.get("value"), row.get("detail"), float(row["ts"])):
+                        n += 1
+                except (KeyError, TypeError, ValueError):
+                    continue
+            conn.commit()
+            conn.close()
+            self._send(200, {"ingested": n})
         else:
             self._send(404, {"error": "not found"})
 

@@ -1,0 +1,27 @@
+{
+  "_README": [
+    "Copy to config.json (gitignored) and edit. All keys are optional.",
+    "HUB (the always-on Pi): set 'source', keep the 'router' block here so router /",
+    "Traffic-Analyzer data is collected 24/7. Optionally set 'ingest_token' to require",
+    "a token on /api/ingest.",
+    "SPOKE (the Mac): set 'source', DROP the 'router' block (the hub owns it), and add",
+    "a 'hub' block pointing at the Pi so this box pushes its samples there.",
+    "ARANET is BLE — keep it on whichever box is near the sensor."
+  ],
+  "source": "pi",
+  "router": {
+    "host": "192.168.2.1",
+    "user": "admin",
+    "pass": "CHANGE_ME",
+    "interval": 300
+  },
+  "lan_targets": {
+    "extender": "192.168.2.184"
+  },
+  "ingest_token": "",
+
+  "_mac_spoke_adds": {
+    "source": "mac",
+    "hub": { "url": "http://PI-IP-HERE:8737", "token": "" }
+  }
+}
