@@ -112,6 +112,7 @@ class Handler(BaseHTTPRequestHandler):
             res["last_speed"] = {s["probe"]: s for s in speed[-4:]}
             res["uptime_s"] = host_uptime_s()
             res["uptime_host"] = socket.gethostname().split(".")[0]
+            res["source"] = netmon.SOURCE  # this box's own source, so the page can default to it
             ip = lan_ip()
             res["lan_url"] = f"http://{ip}:{PORT}/" if ip else None
             self._send(200, res)

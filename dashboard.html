@@ -285,7 +285,11 @@ function renderSources() {
   const srcs = [...new Set(history.map(r => r.source))].filter(s => !history.some(
     r => r.source === s && r.probe.startsWith('phone_')) || true);
   const nonPhone = [...new Set(history.filter(r => !r.probe.startsWith('phone_')).map(r => r.source))];
-  if (!source || !nonPhone.includes(source)) source = nonPhone[0] || null;
+  if (!source || !nonPhone.includes(source)) {
+    // default to the box serving this page (the hub), not just whoever appears first
+    const own = status && status.source;
+    source = (own && nonPhone.includes(own)) ? own : (nonPhone[0] || null);
+  }
   $('src-label').textContent = source ? 'measuring from ' + source : '';
   const seg = $('source-seg');
   if (nonPhone.length > 1) {
