@@ -222,7 +222,10 @@ def run_aranet_probe(conn, source=SOURCE):
     if not cfg or not cfg.get("mac"):
         return None
     import aranet
-    r = aranet.read(cfg.get("mac"))
+    # "advert": read passively from the BLE advertisement (no GATT) — reliable on a
+    # weak link like a Pi's onboard BT, and no single-connection contention.
+    r = (aranet.read_advertisement(cfg["mac"]) if cfg.get("advert")
+         else aranet.read(cfg.get("mac")))
     name = r.get("name") or "aranet"
     if not r.get("ok"):
         db.insert(conn, source, "aranet", name, False, None, {"error": r.get("error")})
@@ -242,7 +245,10 @@ def aranet_backfill(conn, source=SOURCE):
     (a max-timestamp gate would skip everything before that first poll).
     Best-effort — a BLE failure here must not stop the collector."""
     cfg = CONFIG.get("aranet")
-    if not cfg or not cfg.get("mac") or not cfg.get("backfill", True):
+    # advert mode has no GATT connection, so skip the history backfill (it needs one);
+    # an always-on host that reads via advert never has gaps to fill anyway.
+    if (not cfg or not cfg.get("mac") or cfg.get("advert")
+            or not cfg.get("backfill", True)):
         return
     import aranet
     have = {round(ts / 60) for (ts,) in conn.execute(

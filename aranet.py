@@ -32,6 +32,51 @@ def read(mac):
             "battery": c.battery, "interval": c.interval, "ago": c.ago}
 
 
+def read_advertisement(mac, timeout=15):
+    """Current values read passively from the Aranet's BLE *advertisement* — no GATT
+    connection. Needs the sensor's "Smart Home integrations" broadcast enabled (it's
+    what carries the measurements in the advert). Far more reliable than read() on a
+    weak link (e.g. a Pi's onboard BT) and has no single-connection contention, so
+    several hosts can read at once. Same return shape as read(). history() still needs
+    the connection-based path."""
+    if not mac:
+        return {"ok": False, "error": "no-mac-configured"}
+    import asyncio
+    return asyncio.run(_read_advertisement(mac, timeout))
+
+
+async def _read_advertisement(mac, timeout):
+    import asyncio
+    from aranet4.client import Aranet4Advertisement
+    from bleak import BleakScanner
+    target = mac.lower()
+    hit = {}
+
+    def cb(device, ad_data):
+        if device.address.lower() != target or "adv" in hit:
+            return
+        adv = Aranet4Advertisement(device, ad_data)
+        if adv.readings and adv.readings.co2 not in (None, -1):
+            hit["adv"] = adv
+
+    scanner = BleakScanner(detection_callback=cb)
+    await scanner.start()
+    try:
+        loop = asyncio.get_event_loop()
+        t0 = loop.time()
+        while "adv" not in hit and loop.time() - t0 < timeout:
+            await asyncio.sleep(0.2)
+    finally:
+        await scanner.stop()
+    adv = hit.get("adv")
+    if not adv:
+        return {"ok": False, "error": "no-advert-reading"}  # broadcast off or out of range
+    r = adv.readings
+    return {"ok": True, "name": r.name or None, "temp_c": r.temperature,
+            "humidity": r.humidity, "co2": r.co2, "pressure": r.pressure,
+            "battery": r.battery, "interval": r.interval, "ago": r.ago}
+
+
 def history(mac, since_ts=None):
     """Stored on-device log as [{ts, temp_c, humidity, co2, pressure}], oldest first.
     Only entries strictly newer than since_ts are returned, so callers can fill the
@@ -112,6 +157,9 @@ if __name__ == "__main__":
     elif cmd == "read":
         mac = sys.argv[2] if len(sys.argv) > 2 else _configured_mac()
         print(json.dumps(read(mac), indent=2))
+    elif cmd == "advert":
+        mac = sys.argv[2] if len(sys.argv) > 2 else _configured_mac()
+        print(json.dumps(read_advertisement(mac), indent=2))
     elif cmd == "history":
         mac = sys.argv[2] if len(sys.argv) > 2 else _configured_mac()
         recs = history(mac)
