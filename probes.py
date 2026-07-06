@@ -130,6 +130,26 @@ def http_check(url=HTTP_CHECK_URL, timeout_s=5.0):
         return {"ok": False, "error": type(e).__name__}
 
 
+def uptime_s():
+    """Seconds since this host booted — Linux /proc/uptime, else macOS kern.boottime.
+    None if neither works. Recorded per-cycle so each box's uptime rides along in its
+    own samples (and reaches the hub via push)."""
+    try:
+        with open("/proc/uptime") as f:
+            return float(f.read().split()[0])
+    except OSError:
+        pass
+    try:
+        out = subprocess.run(["sysctl", "-n", "kern.boottime"],
+                             capture_output=True, text=True, timeout=3).stdout
+        m = re.search(r"sec = (\d+)", out)
+        if m:
+            return time.time() - int(m.group(1))
+    except Exception:
+        pass
+    return None
+
+
 def wifi_info():
     return _wifi_mac() if IS_MAC else _wifi_linux()
 

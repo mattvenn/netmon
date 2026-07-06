@@ -203,22 +203,20 @@ function bannerError() {
 }
 
 // ---------------- status row ----------------
-const OPTIONAL_TILES = ['isp_box', 'router_wan'];  // only on networks that have them
+const OPTIONAL_TILES = ['uptime', 'isp_box', 'router_wan'];  // only where the source reports them
 const TILE_DEFS = [
+  ['uptime', 'Uptime'],
   ['wifi', 'WiFi'], ['router', 'Router'], ['isp_box', 'ISP box'], ['router_wan', 'WAN link'],
   ['internet', 'Internet'],
   ['dns_system', 'DNS (system)'], ['dns_router', 'DNS (router)'],
   ['dns_direct', 'DNS (direct)'], ['http', 'Web fetch'], ['speed', 'Speed']
 ];
-function fmtUptime(s) {
-  s = Math.floor(s);
-  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
-  return d ? d + 'd ' + h + 'h' : h ? h + 'h ' + m + 'm' : m + 'm';
-}
-
 function renderStatus() {
   if (!status) return;
-  const v = status.verdict || {level: 'unknown', text: 'no data yet'};
+  // per-source view (components + verdict) so the tiles/banner follow the source toggle;
+  // fall back to the hub-wide status before a source is chosen
+  const view = (status.by_source && status.by_source[source]) || status;
+  const v = view.verdict || {level: 'unknown', text: 'no data yet'};
   const b = $('banner');
   b.className = 'banner ' + v.level;
   const icon = {ok: '✓', warn: '⚠', bad: '✕'}[v.level] || '·';
@@ -227,24 +225,11 @@ function renderStatus() {
 
   const tiles = $('tiles');
   tiles.textContent = '';
-  if (status.uptime_s != null) {
-    const t = document.createElement('div'); t.className = 'tile';
-    const l = document.createElement('div'); l.className = 'lbl';
-    const dot = document.createElement('span'); dot.className = 'dot ok';
-    l.append(dot, document.createTextNode('Uptime'));
-    const vv = document.createElement('div'); vv.className = 'val'; vv.textContent = fmtUptime(status.uptime_s);
-    t.append(l, vv);
-    if (status.uptime_host) {
-      const s = document.createElement('div'); s.className = 'sub'; s.textContent = status.uptime_host;
-      t.append(s);
-    }
-    tiles.append(t);
-  }
   const defs = [...TILE_DEFS];
-  for (const key of Object.keys(status.components || {}).sort())
+  for (const key of Object.keys(view.components || {}).sort())
     if (key.startsWith('lan_')) defs.push([key, key.slice(4)]);
   for (const [key, label] of defs) {
-    if (OPTIONAL_TILES.includes(key) && !(status.components && status.components[key])) continue;
+    if (OPTIONAL_TILES.includes(key) && !(view.components && view.components[key])) continue;
     let level = 'unknown', val = '—', sub = '';
     if (key === 'speed') {
       const d = status.last_speed && status.last_speed.speed_down;
@@ -259,7 +244,7 @@ function renderStatus() {
                  sub = '⚠ ' + ct.other_down_mb.toFixed(0) + ' MB other traffic (' + segName + ')';
                } }
     } else {
-      const c = status.components && status.components[key];
+      const c = view.components && view.components[key];
       if (c) {
         level = c.level; val = c.label || '—';
         if (c.sub) sub = c.sub;
@@ -290,6 +275,7 @@ function renderSources() {
     const own = status && status.source;
     source = (own && nonPhone.includes(own)) ? own : (nonPhone[0] || null);
   }
+  renderStatus();  // tiles/banner depend on the chosen source
   $('src-label').textContent = source ? 'measuring from ' + source : '';
   const seg = $('source-seg');
   if (nonPhone.length > 1) {

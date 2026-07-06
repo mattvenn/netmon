@@ -106,6 +106,9 @@ def run_cycle(conn, source=SOURCE):
     rec("dns", "direct", probes.dns_query("1.1.1.1"), "ms")
 
     rec("http", "gstatic", probes.http_check(), "ms")
+
+    up = probes.uptime_s()
+    rec("host_uptime", "host", {"ok": up is not None, "secs": up}, "secs")
     return recorded
 
 
@@ -393,6 +396,12 @@ def _get(latest, probe, target=None, source=None):
     return None
 
 
+def _fmt_uptime(secs):
+    secs = int(secs)
+    d, h, m = secs // 86400, secs % 86400 // 3600, secs % 3600 // 60
+    return f"{d}d {h}h" if d else (f"{h}h {m}m" if h else f"{m}m")
+
+
 def diagnose(latest, source=None):
     """Turn the latest samples into per-component levels and a plain-language verdict."""
     wifi = _get(latest, "wifi", source=source)
@@ -439,6 +448,9 @@ def diagnose(latest, source=None):
         level("router_wan", r_wan, label="{d[statusstr]}")
     if r_up and r_up["ok"] and r_up["value"] and comp.get("router"):
         comp["router"]["sub"] = f"up {r_up['value'] / 86400:.1f}d"
+    host_up = _get(latest, "host_uptime", source=source)
+    if host_up and host_up["ok"] and host_up["value"]:
+        comp["uptime"] = {"level": "ok", "label": _fmt_uptime(host_up["value"]), "sample": host_up}
     wan_levels = [level("internet", wan1, label="{v:.0f} ms")]
     if wan8 and (not wan1 or not wan1["ok"]):
         wan_levels.append(level("internet", wan8, label="{v:.0f} ms"))
