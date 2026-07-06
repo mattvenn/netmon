@@ -67,7 +67,7 @@ button.act:disabled { color: var(--ink-muted); cursor: wait; }
 }
 .tile .lbl { color: var(--ink-2); font-size: 12px; display: flex; gap: 6px; align-items: center; }
 .tile .val { font-size: 20px; font-weight: 600; margin-top: 2px; }
-.tile .sub { color: var(--ink-muted); font-size: 11px; margin-top: 2px; }
+.tile .sub { color: var(--ink-muted); font-size: 11px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .dot.ok { background: var(--st-good); } .dot.warn { background: var(--st-warn); }
 .dot.bad { background: var(--st-crit); } .dot.unknown { background: var(--ink-muted); }
@@ -256,7 +256,8 @@ function renderStatus() {
         if (c.sub) sub = c.sub;
         if (key === 'wifi' && c.sample && c.sample.detail) {
           const d = c.sample.detail;
-          sub = (d.band || '') + ' ch' + (d.channel ?? '?') + ' · ' + (d.rate_mbps ?? '?') + ' Mbps link';
+          sub = (d.band || '') + (d.channel != null ? ' ch' + d.channel : '')
+                + ' · ' + (d.rate_mbps != null ? Math.round(d.rate_mbps) : '?') + ' Mbps';
         }
       }
     }
