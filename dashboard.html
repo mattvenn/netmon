@@ -203,14 +203,19 @@ function bannerError() {
 }
 
 // ---------------- status row ----------------
-const OPTIONAL_TILES = ['uptime', 'isp_box', 'router_wan'];  // only where the source reports them
+const OPTIONAL_TILES = ['uptime', 'isp_box', 'router_wan'];  // hidden when a source lacks them
+// Core tiles every collector reports — fixed order, grouped by the network stack, so
+// switching source never reflows this block.
 const TILE_DEFS = [
   ['uptime', 'Uptime'],
-  ['wifi', 'WiFi'], ['router', 'Router'], ['isp_box', 'ISP box'], ['router_wan', 'WAN link'],
-  ['internet', 'Internet'],
-  ['dns_system', 'DNS (system)'], ['dns_router', 'DNS (router)'],
-  ['dns_direct', 'DNS (direct)'], ['http', 'Web fetch'], ['speed', 'Speed']
+  ['wifi', 'WiFi'], ['router', 'Router'], ['internet', 'Internet'],
+  ['dns_system', 'DNS (system)'], ['dns_router', 'DNS (router)'], ['dns_direct', 'DNS (direct)'],
+  ['http', 'Web fetch'], ['speed', 'Speed']
 ];
+// Source-specific tiles — a spoke without the router probe won't have these. Kept at the
+// very end and grouped (both are ISP/upstream-side) so toggling adds/removes them without
+// shifting the core block above.
+const TRAILING_TILES = [['isp_box', 'ISP box'], ['router_wan', 'WAN link']];
 function renderStatus() {
   if (!status) return;
   // per-source view (components + verdict) so the tiles/banner follow the source toggle;
@@ -225,9 +230,10 @@ function renderStatus() {
 
   const tiles = $('tiles');
   tiles.textContent = '';
-  const defs = [...TILE_DEFS];
-  for (const key of Object.keys(view.components || {}).sort())
-    if (key.startsWith('lan_')) defs.push([key, key.slice(4)]);
+  // core → LAN devices → source-specific extras, so absent tiles only ever drop off the end
+  const lanTiles = Object.keys(view.components || {}).filter(k => k.startsWith('lan_')).sort()
+    .map(k => [k, k.slice(4)]);
+  const defs = [...TILE_DEFS, ...lanTiles, ...TRAILING_TILES];
   for (const [key, label] of defs) {
     if (OPTIONAL_TILES.includes(key) && !(view.components && view.components[key])) continue;
     let level = 'unknown', val = '—', sub = '';
