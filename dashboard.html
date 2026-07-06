@@ -238,8 +238,12 @@ function renderStatus() {
     if (OPTIONAL_TILES.includes(key) && !(view.components && view.components[key])) continue;
     let level = 'unknown', val = '—', sub = '';
     if (key === 'speed') {
-      const d = status.last_speed && status.last_speed.speed_down;
-      const u = status.last_speed && status.last_speed.speed_up;
+      // per-source latest speed so the tile matches the graph; don't borrow another
+      // source's number if the selected one has none (fall back only for first paint)
+      const lsBy = status.last_speed_by_source;
+      const ls = lsBy ? (lsBy[source] || {}) : (status.last_speed || {});
+      const d = ls.speed_down;
+      const u = ls.speed_up;
       if (d) { level = d.ok ? 'ok' : 'bad'; val = d.ok ? '↓' + d.value.toFixed(0) + (u && u.ok ? ' ↑' + u.value.toFixed(0) : '') : 'failed';
                sub = d.ok ? 'Mbps, ' + fmt.time(d.ts * 1000) : '';
                const ct = d.detail && d.detail.contention;

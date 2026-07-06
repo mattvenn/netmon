@@ -91,6 +91,11 @@ class Handler(BaseHTTPRequestHandler):
             # per-source components+verdict so the tiles follow the source toggle
             res["by_source"] = {s: netmon.diagnose(latest, s) for s in sources}
             res["last_speed"] = {s["probe"]: s for s in speed[-4:]}
+            # latest speed_down/up per source, so the Speed tile can follow the toggle
+            last_by_src = {}
+            for sp in speed:  # ordered by ts, so later samples overwrite earlier ones
+                last_by_src.setdefault(sp["source"], {})[sp["probe"]] = sp
+            res["last_speed_by_source"] = last_by_src
             res["source"] = netmon.SOURCE  # this box's own source, so the page can default to it
             ip = lan_ip()
             res["lan_url"] = f"http://{ip}:{PORT}/" if ip else None
