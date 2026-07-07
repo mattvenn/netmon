@@ -576,19 +576,34 @@ def collector_loop(conn_path, lock, interval, speed_interval, stop):
         if last_cycle and t0 - last_cycle > max(3 * interval, 180):
             aranet_backfill(conn)
         last_cycle = t0
+        # Each step is fault-isolated: one probe failing (its last_* timer still
+        # advances so it won't retry-storm) must never starve the others. An
+        # unhandled aranet BLE error used to abort the cycle before the speedtest.
         try:
             with lock:
                 run_cycle(conn)
-            if CONFIG.get("router") and time.time() - last_router >= router_interval:
+        except Exception as e:
+            print(f"[collector] cycle error: {e!r}", flush=True)
+        if CONFIG.get("router") and time.time() - last_router >= router_interval:
+            try:
                 run_router_probe(conn)
-                last_router = time.time()
-            if CONFIG.get("aranet") and time.time() - last_aranet >= aranet_interval:
+            except Exception as e:
+                print(f"[collector] router probe error: {e!r}", flush=True)
+            last_router = time.time()
+        if CONFIG.get("aranet") and time.time() - last_aranet >= aranet_interval:
+            try:
                 run_aranet_probe(conn)
-                last_aranet = time.time()
-            if speed_interval and time.time() - last_speed >= speed_interval:
+            except Exception as e:
+                print(f"[collector] aranet probe error: {e!r}", flush=True)
+            last_aranet = time.time()
+        if speed_interval and time.time() - last_speed >= speed_interval:
+            try:
                 with lock:
                     run_speedtest(conn)
-                last_speed = time.time()
+            except Exception as e:
+                print(f"[collector] speedtest error: {e!r}", flush=True)
+            last_speed = time.time()
+        try:
             if time.time() - last_prune >= 24 * 3600:
                 conn.execute("DELETE FROM samples WHERE ts < ?",
                              (time.time() - RETAIN_DAYS * 24 * 3600,))
@@ -597,7 +612,7 @@ def collector_loop(conn_path, lock, interval, speed_interval, stop):
             if CONFIG.get("hub"):
                 push_to_hub(conn)
         except Exception as e:
-            print(f"[collector] cycle error: {e!r}", flush=True)
+            print(f"[collector] maintenance error: {e!r}", flush=True)
         stop.wait(max(1.0, interval - (time.time() - t0)))
 
 

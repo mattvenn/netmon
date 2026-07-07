@@ -42,7 +42,12 @@ def read_advertisement(mac, timeout=15):
     if not mac:
         return {"ok": False, "error": "no-mac-configured"}
     import asyncio
-    return asyncio.run(_read_advertisement(mac, timeout))
+    try:
+        return asyncio.run(_read_advertisement(mac, timeout))
+    except Exception as e:
+        # BLE/adapter errors (e.g. Bluetooth powered off) must be a recorded failure,
+        # not an exception that bubbles up and aborts the whole collector cycle.
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"[:150]}
 
 
 async def _read_advertisement(mac, timeout):
