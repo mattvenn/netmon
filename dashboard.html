@@ -384,7 +384,8 @@ function renderCharts() {
     {name: 'signal', color: C.rssi, ...seriesOf(pick('wifi'))},
     {name: 'noise', color: C.muted, pts: pick('wifi').filter(r => r.ok && r.detail && r.detail.noise_dbm != null)
         .map(r => ({t: r.ts*1000, v: r.detail.noise_dbm})), fails: []}
-  ], {fmt: fmt.dbm, clip: 0.95,  // tame the odd spurious-strong RSSI spike so the real signal isn't squashed; weak dips (the low end) are kept
+  ], {fmt: fmt.dbm, clip: 0.95, minSpan: 10,  // tame spurious-strong RSSI spikes (weak dips kept) and hold a >=10 dBm axis so a steady signal doesn't get blown up
+
       events: bandChanges(pick('wifi')).map(c => ({t: c.t, label: '→ ' + c.to})),
       extraTip: t => {
       const r = nearest(pick('wifi'), t);
@@ -624,6 +625,12 @@ function drawChart(holder, series, opts) {
       vmax = Math.max(vmin + 1, allv[Math.floor(o.clip * (allv.length - 1))]);
     }
     if (o.max != null) vmax = Math.max(vmax, 1); else if (vmax === vmin) vmax = vmin + 1;
+    // keep a minimum axis span so nearly-flat data (e.g. a steady WiFi signal) isn't
+    // blown up to fill the chart — pad symmetrically around the data's midpoint
+    if (o.minSpan && (vmax - vmin) < o.minSpan) {
+      const mid = (vmax + vmin) / 2;
+      vmin = mid - o.minSpan / 2; vmax = mid + o.minSpan / 2;
+    }
     const [ymin, ymax, ticks] = niceScale(vmin, vmax, o.max);
     const Y = v => M.t + ih - (v - ymin) / (ymax - ymin) * ih;
     const Yc = v => Math.max(M.t, Math.min(H - M.b, Y(v)));
