@@ -8,11 +8,30 @@ exactly what get_current_readings() expects, so `python aranet.py scan` prints t
 value to drop into config.json.
 """
 
+import asyncio
 import json
 import os
 import sys
+import threading
 
 BASE = os.path.dirname(os.path.abspath(__file__))
+
+# One long-lived event loop for all BLE work. bleak's BlueZ backend keeps a single
+# D-Bus connection per event loop; a fresh asyncio.run() per read (across new loops)
+# opens a new system-bus connection each time and leaks it, until dbus refuses the
+# user's 257th connection (max_connections_per_user=256) and every BLE call fails.
+_ble_loop = None
+_ble_lock = threading.Lock()
+
+
+def _ble_run(coro, timeout):
+    global _ble_loop
+    with _ble_lock:
+        if _ble_loop is None:
+            _ble_loop = asyncio.new_event_loop()
+            threading.Thread(target=_ble_loop.run_forever, daemon=True,
+                             name="aranet-ble").start()
+    return asyncio.run_coroutine_threadsafe(coro, _ble_loop).result(timeout)
 
 
 def read(mac):
@@ -41,9 +60,8 @@ def read_advertisement(mac, timeout=15):
     the connection-based path."""
     if not mac:
         return {"ok": False, "error": "no-mac-configured"}
-    import asyncio
     try:
-        return asyncio.run(_read_advertisement(mac, timeout))
+        return _ble_run(_read_advertisement(mac, timeout), timeout + 10)
     except Exception as e:
         # BLE/adapter errors (e.g. Bluetooth powered off) must be a recorded failure,
         # not an exception that bubbles up and aborts the whole collector cycle.
@@ -93,8 +111,7 @@ def history(mac, since_ts=None):
     and returns an empty log. The underlying get_records() works fine."""
     if not mac:
         return []
-    import asyncio
-    return asyncio.run(_history(mac, since_ts))
+    return _ble_run(_history(mac, since_ts), 120)
 
 
 async def _history(mac, since_ts):
