@@ -60,6 +60,7 @@ button.act:disabled { color: var(--ink-muted); cursor: wait; }
 .banner.ok   { border-left-color: var(--st-good); }
 .banner.warn { border-left-color: var(--st-warn); }
 .banner.bad  { border-left-color: var(--st-crit); }
+.tiles-cap { color: var(--ink-muted); font-size: 11px; margin: 0 0 6px; }
 .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin: 0 0 16px; }
 .tile {
   background: var(--surface-1); border: 1px solid var(--border);
@@ -141,6 +142,7 @@ footer { color: var(--ink-muted); font-size: 12px; margin: 18px 0 8px; }
     <button class="act" id="btn-probe">Run checks now</button>
     <button class="act" id="btn-speed">Speed test now</button>
   </div>
+  <div class="tiles-cap" id="tiles-cap"></div>
   <div class="tiles" id="tiles"></div>
   <div class="grid2" id="charts"></div>
   <div id="env-section" style="display:none">
@@ -216,6 +218,38 @@ const TILE_DEFS = [
 // very end and grouped (both are ISP/upstream-side) so toggling adds/removes them without
 // shifting the core block above.
 const TRAILING_TILES = [['isp_box', 'ISP box'], ['router_wan', 'WAN link']];
+// Tiles whose headline number is a meaningful average of the selected window.
+// Maps each to the history probe/target and a formatter. Tiles not listed here
+// (uptime, WAN link status, and speed — handled specially) keep other behaviour.
+const TILE_AVG = {
+  wifi:       {probe: 'wifi',         fmt: v => fmt.dbm(v)},
+  router:     {probe: 'gateway_ping', fmt: v => fmt.ms(v)},
+  isp_box:    {probe: 'hop2_ping',    fmt: v => fmt.ms(v)},
+  internet:   {probe: 'wan_ping', target: '1.1.1.1', fmt: v => fmt.ms(v)},
+  dns_system: {probe: 'dns', target: 'system', fmt: v => fmt.ms(v)},
+  dns_router: {probe: 'dns', target: 'router', fmt: v => fmt.ms(v)},
+  dns_direct: {probe: 'dns', target: 'direct', fmt: v => fmt.ms(v)},
+  http:       {probe: 'http',         fmt: v => fmt.ms(v)}
+};
+// Mean of a probe's good samples across the loaded history (the selected range)
+// for the current source, so tiles summarise the period rather than the latest
+// snapshot. Drops sleep-clock artifacts the same way the latency charts do (a
+// reading far above any real round-trip that lands right after a collection gap
+// = the Mac was asleep mid-probe); the guard only ever fires on those, so it's a
+// no-op for dBm/Mbps tiles. Returns null when the window holds no usable samples.
+function periodAvg(probe, target) {
+  let sum = 0, n = 0, prevTs = null;
+  for (const r of history) {
+    if (r.probe !== probe || r.source !== source) continue;
+    if (target != null && r.target !== target) continue;
+    const gap = prevTs != null ? r.ts - prevTs : 0;
+    prevTs = r.ts;
+    if (!r.ok || r.value == null) continue;
+    if (gap > SLEEP_GAP_S && r.value > ARTIFACT_MS) continue;
+    sum += r.value; n++;
+  }
+  return n ? {avg: sum / n, n} : null;
+}
 function renderStatus() {
   if (!status) return;
   // per-source view (components + verdict) so the tiles/banner follow the source toggle;
@@ -228,6 +262,7 @@ function renderStatus() {
   $('banner-txt').textContent = icon + '  ' + v.text;
   $('banner-when').textContent = 'as of ' + fmt.timeS(status.ts * 1000);
 
+  $('tiles-cap').textContent = 'averages over the last ' + rangeLabel() + ' · dot shows live status';
   const tiles = $('tiles');
   tiles.textContent = '';
   // core → LAN devices → source-specific extras, so absent tiles only ever drop off the end
@@ -263,6 +298,24 @@ function renderStatus() {
           sub = (d.band || '') + (d.channel != null ? ' ch' + d.channel : '')
                 + ' · ' + (d.rate_mbps != null ? Math.round(d.rate_mbps) : '?') + ' Mbps';
         }
+      }
+    }
+    // Swap the headline number for its average over the selected window (the dot
+    // stays live status). Speed keeps its own down/up handling; everything else
+    // maps onto a single probe/target.
+    if (key === 'speed') {
+      const down = periodAvg('speed_down'), up = periodAvg('speed_up');
+      if (down) {
+        val = '↓' + down.avg.toFixed(0) + (up ? ' ↑' + up.avg.toFixed(0) : '');
+        sub = 'Mbps · avg of ' + down.n + ' over ' + rangeLabel();
+      }
+    } else {
+      const m = TILE_AVG[key] || (key.startsWith('lan_')
+        ? {probe: 'lan_ping', target: key.slice(4), fmt: v => fmt.ms(v)} : null);
+      if (m) {
+        let a = periodAvg(m.probe, m.target);
+        if (!a && key === 'internet') a = periodAvg('wan_ping', '8.8.8.8');
+        if (a) val = m.fmt(a.avg);
       }
     }
     const t = document.createElement('div'); t.className = 'tile';
